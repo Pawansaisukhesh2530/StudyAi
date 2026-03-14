@@ -1682,3 +1682,208 @@ a:hover { text-decoration: underline; }
 	.learn-progress__steps { gap: 0; }
 }
 
+/* ─── Auth Page ─────────────────────────────────────────────── */
+.auth-page {
+	min-height: 100vh;
+	display: grid;
+	place-items: center;
+	padding: 24px;
+	background:
+		radial-gradient(circle at 15% 20%, rgba(99,102,241,.16), transparent 40%),
+		radial-gradient(circle at 85% 80%, rgba(16,185,129,.12), transparent 38%),
+		var(--color-bg);
+}
+
+.auth-card {
+	width: min(440px, 100%);
+	display: flex;
+	flex-direction: column;
+	gap: 14px;
+}
+
+.auth-brand {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	color: var(--color-primary);
+}
+
+.auth-brand h1 {
+	font-size: 1.3rem;
+	font-weight: 700;
+}
+
+.auth-subtitle { color: var(--color-text-muted); font-size: 0.9rem; }
+.auth-switch { display: flex; gap: 8px; }
+.auth-form { display: flex; flex-direction: column; gap: 10px; }
+
+.auth-divider {
+	text-align: center;
+	font-size: 0.82rem;
+	color: var(--color-text-dim);
+	text-transform: uppercase;
+	letter-spacing: .05em;
+}
+
+.auth-notice {
+	background: rgba(16,185,129,.13);
+	border: 1px solid rgba(16,185,129,.35);
+	border-radius: var(--radius-sm);
+	padding: 10px 12px;
+	color: #34d399;
+	font-size: 0.84rem;
+}
+
+/* ─── Navbar Additions ──────────────────────────────────────── */
+.navbar__user {
+	max-width: 220px;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+	font-size: 0.8rem;
+	color: var(--color-text-muted);
+	border: 1px solid var(--color-border);
+	background: var(--color-surface-2);
+	padding: 4px 8px;
+	border-radius: 999px;
+	margin-right: 8px;
+}
+
+/* ─── Tutor Refinements ─────────────────────────────────────── */
+.tutor-page__history-group {
+	display: flex;
+	flex-direction: column;
+	gap: 4px;
+	margin-bottom: 10px;
+}
+
+.tutor-page__history-group-label {
+	font-size: 0.7rem;
+	color: var(--color-text-dim);
+	text-transform: uppercase;
+	letter-spacing: .05em;
+	padding: 4px 8px;
+}
+
+.tutor-feature-cards {
+	display: grid;
+	grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+	gap: 10px;
+	width: min(820px, 100%);
+	margin-top: 6px;
+}
+
+.tutor-feature-card {
+	display: flex;
+	align-items: flex-start;
+	gap: 10px;
+	text-align: left;
+	padding: 12px 14px;
+	border-radius: var(--radius-md);
+	background: var(--color-surface-2);
+	border: 1px solid var(--color-border);
+	color: var(--color-text);
+	cursor: pointer;
+	transition: transform 120ms, border-color var(--transition), background var(--transition);
+}
+
+.tutor-feature-card:hover {
+	border-color: var(--color-primary);
+	background: rgba(99,102,241,.08);
+	transform: translateY(-1px);
+}
+
+.tutor-feature-card strong { display: block; font-size: 0.86rem; margin-bottom: 2px; }
+.tutor-feature-card span { font-size: 0.77rem; color: var(--color-text-muted); }
+
+.tutor-recent-topics {
+	width: min(820px, 100%);
+	padding: 12px;
+	margin-top: 4px;
+	text-align: left;
+}
+
+.tutor-recent-topics__title {
+	display: inline-flex;
+	align-items: center;
+	gap: 6px;
+	font-size: 0.8rem;
+	font-weight: 600;
+	color: var(--color-text-muted);
+	margin-bottom: 8px;
+}
+
+.chat-loading-state {
+	display: flex;
+	flex-direction: column;
+	gap: 8px;
+	min-width: 260px;
+}
+
+.chat-loading-label {
+	display: inline-flex;
+	align-items: center;
+	gap: 6px;
+	font-size: 0.78rem;
+	color: var(--color-text-dim);
+}
+
+.tutor-page__input-area {
+	position: relative;
+}
+
+.tutor-command-suggestions {
+	position: absolute;
+	left: 16px;
+	right: 110px;
+	bottom: 100%;
+	margin-bottom: 8px;
+	background: var(--color-surface);
+	border: 1px solid var(--color-border);
+	border-radius: var(--radius-md);
+	box-shadow: var(--shadow-md);
+	display: flex;
+	flex-direction: column;
+	gap: 4px;
+	padding: 8px;
+	z-index: 10;
+}
+
+.tutor-command-suggestion {
+	display: flex;
+	justify-content: space-between;
+	align-items: baseline;
+	gap: 10px;
+	text-align: left;
+	padding: 8px 10px;
+	border-radius: var(--radius-sm);
+	border: 1px solid transparent;
+	background: transparent;
+	color: var(--color-text);
+	cursor: pointer;
+}
+
+.tutor-command-suggestion:hover {
+	background: rgba(99,102,241,.1);
+	border-color: rgba(99,102,241,.35);
+}
+
+.tutor-command-suggestion span {
+	font-size: 0.82rem;
+	font-weight: 600;
+}
+
+.tutor-command-suggestion small {
+	font-size: 0.74rem;
+	color: var(--color-text-dim);
+}
+
+@media (max-width: 768px) {
+	.tutor-feature-cards {
+		grid-template-columns: 1fr;
+	}
+	.navbar__user {
+		display: none;
+	}
+}
+

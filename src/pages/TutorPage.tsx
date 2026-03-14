@@ -1,19 +1,27 @@
 import { useState, useRef, useEffect } from 'react';
-import { Send, Plus, Trash2, MessageSquare } from 'lucide-react';
+import { Send, Plus, Trash2, MessageSquare, Sparkles, FileText, HelpCircle, CreditCard, Rocket, BookOpen, Pencil } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import MarkdownRenderer from '../components/MarkdownRenderer';
-import LoadingSpinner from '../components/LoadingSpinner';
+import { SkeletonText } from '../components/SkeletonLoader';
 import {
   getConversations,
   saveConversation,
   createConversation,
   deleteConversation,
+  getActiveTopic,
+  getTopics,
   type Conversation,
   type ChatMessage,
 } from '../services/storage';
 import { requestTutorReply, type TutorMessage } from '../services/geminiService';
-import { generateExplanation } from '../services/geminiService';
-import { incrementAiInteraction, upsertTopicFromExplanation, setActiveTopic } from '../services/storage';
+import { incrementAiInteraction } from '../services/storage';
+import {
+  detectIntent,
+  getCommandSuggestions,
+  routeForIntent,
+  setPendingAction,
+  type IntentResult,
+} from '../services/intentSystem';
 
 const REQUEST_COOLDOWN_MS = 2000;
 
@@ -25,18 +33,39 @@ export default function TutorPage() {
     return convs.length > 0 ? convs[0].id : null;
   });
   const [input, setInput] = useState('');
-  const [topicInput, setTopicInput] = useState('');
-  const [topicLoading, setTopicLoading] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [showSuggestions, setShowSuggestions] = useState(false);
   const lastRequestAtRef = useRef<number>(0);
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const recentTopics = getTopics().slice(0, 5);
+  const commandSuggestions = getCommandSuggestions(input);
 
   const activeConversation = conversations.find((c) => c.id === activeId) ?? null;
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [activeConversation?.messages]);
+
+  const groupedConversations = (() => {
+    const groups: Record<'today' | 'yesterday' | 'lastWeek', Conversation[]> = {
+      today: [],
+      yesterday: [],
+      lastWeek: [],
+    };
+    const nowDate = new Date();
+    const todayStart = new Date(nowDate.getFullYear(), nowDate.getMonth(), nowDate.getDate()).getTime();
+    const yesterdayStart = todayStart - 24 * 60 * 60 * 1000;
+    const weekStart = todayStart - 7 * 24 * 60 * 60 * 1000;
+
+    conversations.forEach((conv) => {
+      if (conv.updatedAt >= todayStart) groups.today.push(conv);
+      else if (conv.updatedAt >= yesterdayStart) groups.yesterday.push(conv);
+      else if (conv.updatedAt >= weekStart) groups.lastWeek.push(conv);
+    });
+
+    return groups;
+  })();
 
   function handleNewConversation() {
     const conv = createConversation();
@@ -52,6 +81,77 @@ export default function TutorPage() {
     if (activeId === id) {
       setActiveId(updated.length > 0 ? updated[0].id : null);
     }
+  }
+
+  function handleRenameConversation(id: string) {
+    const conv = conversations.find((c) => c.id === id);
+    if (!conv) return;
+    const nextTitle = window.prompt('Rename conversation', conv.title);
+    if (!nextTitle || !nextTitle.trim()) return;
+    saveConversation({ ...conv, title: nextTitle.trim(), updatedAt: Date.now() });
+    setConversations(getConversations());
+  }
+
+  function createAssistantMessage(content: string): ChatMessage {
+    return {
+      id: `${Date.now()}-assistant`,
+      role: 'assistant',
+      content,
+      timestamp: Date.now(),
+    };
+  }
+
+  function resolveTopic(intentResult: IntentResult): string | null {
+    if (intentResult.topic) return intentResult.topic;
+    const activeTopic = getActiveTopic();
+    return activeTopic?.name ?? null;
+  }
+
+  function handleIntentCommand(intentResult: IntentResult, updatedConv: Conversation): boolean {
+    if (intentResult.intent === 'chat') return false;
+
+    const topic = resolveTopic(intentResult);
+    const topicRequired = intentResult.intent !== 'learning_mode';
+
+    if (topicRequired && !topic) {
+      const failMsg = createAssistantMessage(
+        'I need a topic first. Try a command like: "Explain machine learning" or open Workspace and set a current topic.'
+      );
+      saveConversation({
+        ...updatedConv,
+        messages: [...updatedConv.messages, failMsg],
+        updatedAt: Date.now(),
+      });
+      setConversations(getConversations());
+      return true;
+    }
+
+    setPendingAction({
+      intent: intentResult.intent,
+      topic: topic ?? undefined,
+      sourceMessage: updatedConv.messages[updatedConv.messages.length - 1]?.content ?? '',
+      createdAt: Date.now(),
+    });
+
+    const route = routeForIntent(intentResult.intent);
+    const labelByIntent: Record<typeof intentResult.intent, string> = {
+      generate_notes: 'Generating notes',
+      generate_quiz: 'Generating quiz',
+      generate_flashcards: 'Generating flashcards',
+      explain_topic: 'Opening explanation flow',
+      learning_mode: 'Starting learning mode',
+      save_topic: 'Saving topic',
+    };
+
+    const successMsg = createAssistantMessage(`✅ ${labelByIntent[intentResult.intent]}${topic ? ` for **${topic}**` : ''}.`);
+    saveConversation({
+      ...updatedConv,
+      messages: [...updatedConv.messages, successMsg],
+      updatedAt: Date.now(),
+    });
+    setConversations(getConversations());
+    navigate(route);
+    return true;
   }
 
   async function handleSend() {
@@ -94,9 +194,16 @@ export default function TutorPage() {
     setConversations(getConversations());
     setActiveId(updatedConv.id);
     setInput('');
+    setShowSuggestions(false);
     setLoading(true);
 
     try {
+      const intentResult = detectIntent(trimmed);
+      if (handleIntentCommand(intentResult, updatedConv)) {
+        setLoading(false);
+        return;
+      }
+
       const history: TutorMessage[] = updatedConv.messages
         .slice(0, -1)
         .map((m) => ({
@@ -141,24 +248,6 @@ export default function TutorPage() {
     }
   }
 
-  async function handleStartTopicLearning() {
-    const trimmed = topicInput.trim();
-    if (!trimmed || topicLoading) return;
-    setError(null);
-    setTopicLoading(true);
-    try {
-      const explanation = await generateExplanation(trimmed);
-      incrementAiInteraction();
-      const topic = upsertTopicFromExplanation(trimmed, explanation);
-      setActiveTopic(topic.id);
-      navigate('/workspace');
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to start topic learning.');
-    } finally {
-      setTopicLoading(false);
-    }
-  }
-
   return (
     <div className="tutor-page">
       {/* Conversation history sidebar */}
@@ -173,25 +262,46 @@ export default function TutorPage() {
           {conversations.length === 0 && (
             <p className="tutor-page__history-empty">No conversations yet</p>
           )}
-          {conversations.map((conv) => (
-            <div
-              key={conv.id}
-              className={`tutor-page__history-item ${conv.id === activeId ? 'tutor-page__history-item--active' : ''}`}
-              onClick={() => setActiveId(conv.id)}
-            >
-              <MessageSquare size={14} />
-              <span className="tutor-page__history-item-title">{conv.title}</span>
-              <button
-                className="icon-btn icon-btn--danger"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  handleDeleteConversation(conv.id);
-                }}
-                title="Delete"
-              >
-                <Trash2 size={14} />
-              </button>
-            </div>
+          {[
+            { label: 'Today', items: groupedConversations.today },
+            { label: 'Yesterday', items: groupedConversations.yesterday },
+            { label: 'Last Week', items: groupedConversations.lastWeek },
+          ].map((group) => (
+            group.items.length > 0 ? (
+              <div key={group.label} className="tutor-page__history-group">
+                <div className="tutor-page__history-group-label">{group.label}</div>
+                {group.items.map((conv) => (
+                  <div
+                    key={conv.id}
+                    className={`tutor-page__history-item ${conv.id === activeId ? 'tutor-page__history-item--active' : ''}`}
+                    onClick={() => setActiveId(conv.id)}
+                  >
+                    <MessageSquare size={14} />
+                    <span className="tutor-page__history-item-title">{conv.title}</span>
+                    <button
+                      className="icon-btn"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        handleRenameConversation(conv.id);
+                      }}
+                      title="Rename"
+                    >
+                      <Pencil size={14} />
+                    </button>
+                    <button
+                      className="icon-btn icon-btn--danger"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        handleDeleteConversation(conv.id);
+                      }}
+                      title="Delete"
+                    >
+                      <Trash2 size={14} />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            ) : null
           ))}
         </div>
       </aside>
@@ -203,24 +313,53 @@ export default function TutorPage() {
             <div className="tutor-page__welcome">
               <div className="tutor-page__welcome-icon">🎓</div>
               <h2>Welcome to AI Tutor</h2>
-              <p>Ask me anything — I'll explain it clearly and thoroughly.</p>
-              <div className="input-row" style={{ width: '100%', maxWidth: 640 }}>
-                <input
-                  className="text-input"
-                  value={topicInput}
-                  onChange={(e) => setTopicInput(e.target.value)}
-                  onKeyDown={(e) => e.key === 'Enter' && handleStartTopicLearning()}
-                  placeholder="Start learning a topic once (e.g., Cell Biology)"
-                  disabled={topicLoading || loading}
-                />
-                <button
-                  className="btn btn--secondary"
-                  onClick={handleStartTopicLearning}
-                  disabled={topicLoading || !topicInput.trim()}
-                >
-                  {topicLoading ? 'Preparing...' : 'Start Topic Learning'}
+              <p>Ask anything below or jump directly into a learning workflow.</p>
+
+              <div className="tutor-feature-cards">
+                <button className="tutor-feature-card" onClick={() => navigate('/workspace')}>
+                  <FileText size={16} />
+                  <div>
+                    <strong>Generate Notes</strong>
+                    <span>Turn topics into study notes.</span>
+                  </div>
+                </button>
+                <button className="tutor-feature-card" onClick={() => navigate('/quizzes')}>
+                  <HelpCircle size={16} />
+                  <div>
+                    <strong>Generate Quiz</strong>
+                    <span>Practice with AI questions.</span>
+                  </div>
+                </button>
+                <button className="tutor-feature-card" onClick={() => navigate('/flashcards')}>
+                  <CreditCard size={16} />
+                  <div>
+                    <strong>Flashcards</strong>
+                    <span>Memorize concepts quickly.</span>
+                  </div>
+                </button>
+                <button className="tutor-feature-card" onClick={() => navigate('/learn')}>
+                  <Rocket size={16} />
+                  <div>
+                    <strong>Learning Mode</strong>
+                    <span>Follow guided study steps.</span>
+                  </div>
                 </button>
               </div>
+
+              <div className="tutor-recent-topics card">
+                <div className="tutor-recent-topics__title">
+                  <BookOpen size={14} /> Recent Topics
+                </div>
+                <div className="workspace-suggestions">
+                  {recentTopics.length === 0 && <span className="page-subtitle">No recent topics yet.</span>}
+                  {recentTopics.map((topic) => (
+                    <button key={topic.id} className="chip" onClick={() => navigate('/workspace')}>
+                      {topic.name}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
               <div className="tutor-page__suggestions">
                 {[
                   'Explain photosynthesis to me',
@@ -261,7 +400,10 @@ export default function TutorPage() {
             <div className="chat-bubble chat-bubble--assistant">
               <div className="chat-bubble__avatar">🎓</div>
               <div className="chat-bubble__content">
-                <LoadingSpinner size={20} text="Thinking..." />
+                <div className="chat-loading-state">
+                  <SkeletonText lines={3} />
+                  <div className="chat-loading-label"><Sparkles size={14} /> Thinking...</div>
+                </div>
               </div>
             </div>
           )}
@@ -277,12 +419,34 @@ export default function TutorPage() {
           <textarea
             className="tutor-page__input"
             value={input}
-            onChange={(e) => setInput(e.target.value)}
+            onChange={(e) => {
+              setInput(e.target.value);
+              setShowSuggestions(true);
+            }}
             onKeyDown={handleKeyDown}
-            placeholder="Ask the AI tutor anything... (Enter to send, Shift+Enter for new line)"
+            onFocus={() => setShowSuggestions(true)}
+            placeholder="Ask the AI tutor anything... (Enter to send, Shift+Enter for a new line)"
             rows={3}
             disabled={loading}
           />
+          {showSuggestions && commandSuggestions.length > 0 && (
+            <div className="tutor-command-suggestions">
+              {commandSuggestions.map((suggestion) => (
+                <button
+                  key={suggestion.command}
+                  className="tutor-command-suggestion"
+                  onMouseDown={(e) => {
+                    e.preventDefault();
+                    setInput(suggestion.command);
+                    setShowSuggestions(false);
+                  }}
+                >
+                  <span>{suggestion.label}</span>
+                  <small>{suggestion.command}</small>
+                </button>
+              ))}
+            </div>
+          )}
           <button
             className="btn btn--primary tutor-page__send-btn"
             onClick={handleSend}

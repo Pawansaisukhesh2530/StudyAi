@@ -5,6 +5,7 @@ import {
   generateExplanation,
   generateFlashcards,
   generateQuiz,
+  reexplain,
   type Flashcard,
   type QuizQuestion,
 } from '../services/geminiService';
@@ -27,6 +28,7 @@ const STEPS = [
   { key: 'topic', label: 'Choose Topic', emoji: '🎯', description: 'Enter a topic to start learning' },
   { key: 'explanation', label: 'Explanation', emoji: '📘', description: 'AI generates a structured overview' },
   { key: 'concepts', label: 'Key Concepts', emoji: '🧠', description: 'Review the core ideas' },
+  { key: 'examples', label: 'Examples', emoji: '🌍', description: 'Understand with real-world examples' },
   { key: 'flashcards', label: 'Flashcards', emoji: '🎴', description: 'Memorize key terms' },
   { key: 'quiz', label: 'Quiz', emoji: '🎯', description: 'Test your knowledge' },
   { key: 'summary', label: 'Summary', emoji: '🏆', description: 'Review and celebrate' },
@@ -39,6 +41,7 @@ export default function LearningModePage() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [explanation, setExplanation] = useState('');
+  const [examplesText, setExamplesText] = useState('');
   const [flashcards, setFlashcards] = useState<Flashcard[]>([]);
   const [questions, setQuestions] = useState<QuizQuestion[]>([]);
   const [cardIndex, setCardIndex] = useState(0);
@@ -60,6 +63,7 @@ export default function LearningModePage() {
       completeTopicStep(topic.id, 'explanation');
       incrementConceptsLearned(4);
       setExplanation(text);
+      setExamplesText('');
       setStepIdx(1);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to start learning.');
@@ -79,7 +83,7 @@ export default function LearningModePage() {
       completeTopicStep(topic.id, 'flashcards');
       setFlashcards(cards);
       setCardIndex(0);
-      setStepIdx(3);
+      setStepIdx(4);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to load flashcards.');
     } finally {
@@ -100,7 +104,7 @@ export default function LearningModePage() {
       setQuestions(qs);
       setAnswers({});
       setQuizSubmitted(false);
-      setStepIdx(4);
+      setStepIdx(5);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to load quiz.');
     } finally {
@@ -114,7 +118,7 @@ export default function LearningModePage() {
 
   function handleQuizSubmit() {
     setQuizSubmitted(true);
-    setStepIdx(5);
+    setStepIdx(6);
   }
 
   const quizScore = quizSubmitted && questions.length > 0
@@ -218,16 +222,59 @@ export default function LearningModePage() {
             <button className="btn btn--ghost" onClick={() => setStepIdx(1)}>
               <ChevronLeft size={16} /> Back
             </button>
-            <button className="btn btn--primary" onClick={handleAdvanceToFlashcards} disabled={loading}>
+            <button
+              className="btn btn--primary"
+              onClick={async () => {
+                setLoading(true);
+                setError(null);
+                try {
+                  const examples = await reexplain(currentTopicName, explanation, 'examples');
+                  incrementAiInteraction();
+                  setExamplesText(examples);
+                  setStepIdx(3);
+                } catch (err) {
+                  setError(err instanceof Error ? err.message : 'Failed to load examples.');
+                } finally {
+                  setLoading(false);
+                }
+              }}
+              disabled={loading}
+            >
               {loading ? <Loader2 size={16} className="spin" /> : null}
-              Next: Flashcards <ChevronRight size={16} />
+              Next: Examples <ChevronRight size={16} />
             </button>
           </div>
         </div>
       )}
 
-      {/* Step 3: Flashcards */}
+      {/* Step 3: Examples */}
       {stepIdx === 3 && (
+        <div className="learn-panel-content">
+          <div className="learn-panel__step-header">
+            <span>🌍</span>
+            <h2>Examples: {currentTopicName}</h2>
+          </div>
+          {loading ? <SkeletonCard /> : (
+            <>
+              <div className="card">
+                <MarkdownRenderer content={examplesText || explanation} />
+              </div>
+              <div className="learn-nav">
+                <button className="btn btn--ghost" onClick={() => setStepIdx(2)}>
+                  <ChevronLeft size={16} /> Back
+                </button>
+                <button className="btn btn--primary" onClick={handleAdvanceToFlashcards} disabled={loading}>
+                  {loading ? <Loader2 size={16} className="spin" /> : null}
+                  Next: Flashcards <ChevronRight size={16} />
+                </button>
+              </div>
+            </>
+          )}
+        </div>
+      )}
+
+      {/* Step 3: Flashcards */}
+      {stepIdx === 4 && (
         <div className="learn-panel-content">
           <div className="learn-panel__step-header">
             <span>🎴</span>
@@ -255,7 +302,7 @@ export default function LearningModePage() {
                 </>
               )}
               <div className="learn-nav">
-                <button className="btn btn--ghost" onClick={() => setStepIdx(2)}>
+                <button className="btn btn--ghost" onClick={() => setStepIdx(3)}>
                   <ChevronLeft size={16} /> Back
                 </button>
                 <button className="btn btn--primary" onClick={handleAdvanceToQuiz} disabled={loading}>
@@ -269,7 +316,7 @@ export default function LearningModePage() {
       )}
 
       {/* Step 4: Quiz */}
-      {stepIdx === 4 && (
+      {stepIdx === 5 && (
         <div className="learn-panel-content">
           <div className="learn-panel__step-header">
             <span>🎯</span>
@@ -308,7 +355,7 @@ export default function LearningModePage() {
       )}
 
       {/* Step 5: Summary */}
-      {stepIdx === 5 && (
+      {stepIdx === 6 && (
         <div className="learn-panel-content">
           <div className="card learn-summary">
             <div className="learn-summary__header">

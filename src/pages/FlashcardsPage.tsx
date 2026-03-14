@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Loader2, ChevronLeft, ChevronRight, RotateCcw, Layers } from 'lucide-react';
 import { generateFlashcards, type Flashcard } from '../services/geminiService';
 import {
@@ -12,6 +12,7 @@ import {
 } from '../services/storage';
 import FlashCard from '../components/FlashCard';
 import { SkeletonCard } from '../components/SkeletonLoader';
+import { clearPendingAction, getPendingAction } from '../services/intentSystem';
 
 export default function FlashcardsPage() {
   const [topics, setTopics] = useState<Topic[]>(() => getTopics());
@@ -22,9 +23,31 @@ export default function FlashcardsPage() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [cardIndex, setCardIndex] = useState(0);
+  const commandRanRef = useRef(false);
 
   const selectedTopic = topics.find((t) => t.id === selectedTopicId) ?? null;
   const cards: Flashcard[] = selectedTopic?.flashcards ?? [];
+
+  useEffect(() => {
+    if (commandRanRef.current) return;
+    const pending = getPendingAction();
+    if (!pending || pending.intent !== 'generate_flashcards') return;
+
+    commandRanRef.current = true;
+
+    if (pending.topic) {
+      const byName = topics.find((t) => t.name.toLowerCase().trim() === pending.topic?.toLowerCase().trim());
+      if (byName) {
+        setSelectedTopicId(byName.id);
+        setActiveTopic(byName.id);
+      }
+    }
+
+    clearPendingAction();
+    setTimeout(() => {
+      void handleGenerate();
+    }, 0);
+  }, [topics]);
 
   async function handleGenerate() {
     if (!selectedTopic) return;

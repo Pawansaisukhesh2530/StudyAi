@@ -1,3 +1,14 @@
+import {
+  collection,
+  deleteDoc,
+  doc,
+  getDocs,
+  query,
+  setDoc,
+  where,
+} from 'firebase/firestore';
+import { db, isFirebaseConfigured } from './firebase';
+
 export interface ChatMessage {
   id: string;
   role: 'user' | 'assistant';
@@ -69,13 +80,26 @@ export interface ProgressStats {
   conceptsLearned: number;
 }
 
-function generateId(): string {
-  return `${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
-}
-
-// ─── Conversations ────────────────────────────────────────────────────────────
-
 const CONV_KEY = 'studyai_conversations';
+const TOPICS_KEY = 'studyai_topics';
+const ACTIVE_TOPIC_KEY = 'studyai_active_topic_id';
+const QUIZZES_KEY = 'studyai_quizzes';
+const NOTES_KEY = 'studyai_notes';
+const STATS_KEY = 'studyai_stats';
+
+const COLLECTIONS = {
+  users: 'users',
+  conversations: 'conversations',
+  topics: 'topics',
+  flashcards: 'flashcards',
+  quizzes: 'quizzes',
+  notes: 'notes',
+  progress: 'progress',
+} as const;
+
+type CollectionName = Exclude<keyof typeof COLLECTIONS, 'users'>;
+
+let storageScopeUser: string | null = null;
 
 interface LegacyChatMessage {
   id?: string;
@@ -86,68 +110,12 @@ interface LegacyChatMessage {
 }
 
 interface LegacyConversation {
-  id: string;
-  title: string;
-  messages: LegacyChatMessage[];
-  createdAt: number;
-  updatedAt: number;
+  id?: string;
+  title?: string;
+  messages?: LegacyChatMessage[];
+  createdAt?: number;
+  updatedAt?: number;
 }
-
-function normalizeMessage(msg: LegacyChatMessage, idx: number): ChatMessage {
-  const role = msg.role === 'model' ? 'assistant' : msg.role === 'user' ? 'user' : 'assistant';
-  return {
-    id: msg.id ?? `${Date.now()}-${idx}`,
-    role,
-    content: msg.content ?? msg.parts ?? '',
-    timestamp: msg.timestamp ?? Date.now(),
-  };
-}
-
-function normalizeConversation(conv: LegacyConversation): Conversation {
-  return {
-    id: conv.id,
-    title: conv.title,
-    messages: (conv.messages ?? []).map(normalizeMessage),
-    createdAt: conv.createdAt,
-    updatedAt: conv.updatedAt,
-  };
-}
-
-export function getConversations(): Conversation[] {
-  const raw = localStorage.getItem(CONV_KEY);
-  if (!raw) return [];
-  try {
-    const parsed = JSON.parse(raw) as LegacyConversation[];
-    return parsed.map(normalizeConversation);
-  } catch {
-    return [];
-  }
-}
-
-export function saveConversation(conv: Conversation): void {
-  const convs = getConversations().filter((c) => c.id !== conv.id);
-  localStorage.setItem(CONV_KEY, JSON.stringify([conv, ...convs]));
-}
-
-export function createConversation(): Conversation {
-  return {
-    id: generateId(),
-    title: 'New Conversation',
-    messages: [],
-    createdAt: Date.now(),
-    updatedAt: Date.now(),
-  };
-}
-
-export function deleteConversation(id: string): void {
-  const convs = getConversations().filter((c) => c.id !== id);
-  localStorage.setItem(CONV_KEY, JSON.stringify(convs));
-}
-
-// ─── Topics ───────────────────────────────────────────────────────────────────
-
-const TOPICS_KEY = 'studyai_topics';
-const ACTIVE_TOPIC_KEY = 'studyai_active_topic_id';
 
 interface LegacyTopic {
   id?: string;
@@ -163,10 +131,71 @@ interface LegacyTopic {
   updatedAt?: number;
 }
 
-function normalizeTopic(topic: LegacyTopic, idx: number): Topic {
-  const created = topic.createdAt ?? topic.timestamp ?? Date.now();
+function now(): number {
+  return Date.now();
+}
+
+function generateId(): string {
+  return `${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
+}
+
+function currentScopeUser(): string | null {
+  return storageScopeUser;
+}
+
+function scopedKey(baseKey: string): string {
+  const user = currentScopeUser();
+  return user ? `${baseKey}:${user}` : `${baseKey}:guest`;
+}
+
+function readScopedRaw(baseKey: string): string | null {
+  const exact = localStorage.getItem(scopedKey(baseKey));
+  if (exact) return exact;
+
+  if (!currentScopeUser()) {
+    const legacy = localStorage.getItem(baseKey);
+    if (legacy) {
+      localStorage.setItem(scopedKey(baseKey), legacy);
+      return legacy;
+    }
+  }
+
+  return null;
+}
+
+function writeScopedRaw(baseKey: string, value: string): void {
+  localStorage.setItem(scopedKey(baseKey), value);
+}
+
+function removeScopedRaw(baseKey: string): void {
+  localStorage.removeItem(scopedKey(baseKey));
+}
+
+function normalizeMessage(msg: LegacyChatMessage, idx: number): ChatMessage {
+  const role = msg.role === 'model' ? 'assistant' : msg.role === 'user' ? 'user' : 'assistant';
   return {
-    id: topic.id ?? `${Date.now()}-topic-${idx}`,
+    id: msg.id ?? `${now()}-${idx}`,
+    role,
+    content: msg.content ?? msg.parts ?? '',
+    timestamp: msg.timestamp ?? now(),
+  };
+}
+
+function normalizeConversation(conv: LegacyConversation, idx: number): Conversation {
+  const createdAt = conv.createdAt ?? now();
+  return {
+    id: conv.id ?? `${now()}-conv-${idx}`,
+    title: conv.title ?? 'New Conversation',
+    messages: (conv.messages ?? []).map(normalizeMessage),
+    createdAt,
+    updatedAt: conv.updatedAt ?? createdAt,
+  };
+}
+
+function normalizeTopic(topic: LegacyTopic, idx: number): Topic {
+  const created = topic.createdAt ?? topic.timestamp ?? now();
+  return {
+    id: topic.id ?? `${now()}-topic-${idx}`,
     name: topic.name ?? 'Untitled Topic',
     explanation: topic.explanation ?? '',
     notes: topic.notes ?? null,
@@ -180,8 +209,149 @@ function normalizeTopic(topic: LegacyTopic, idx: number): Topic {
   };
 }
 
+function writeConversations(conversations: Conversation[]): void {
+  writeScopedRaw(CONV_KEY, JSON.stringify(conversations));
+}
+
+function writeTopics(topics: Topic[]): void {
+  writeScopedRaw(TOPICS_KEY, JSON.stringify(topics));
+}
+
+function writeQuizzes(quizzes: Quiz[]): void {
+  writeScopedRaw(QUIZZES_KEY, JSON.stringify(quizzes));
+}
+
+function writeNotes(notes: Note[]): void {
+  writeScopedRaw(NOTES_KEY, JSON.stringify(notes));
+}
+
+function writeStats(stats: ProgressStats): void {
+  writeScopedRaw(STATS_KEY, JSON.stringify(stats));
+}
+
+async function upsertRemote(collectionName: CollectionName, id: string, payload: Record<string, unknown>): Promise<void> {
+  if (!isFirebaseConfigured || !db) return;
+  const userId = currentScopeUser();
+  if (!userId) return;
+
+  await setDoc(
+    doc(db, COLLECTIONS[collectionName], id),
+    {
+      ...payload,
+      id,
+      userId,
+      updatedAt: now(),
+    },
+    { merge: true }
+  );
+}
+
+async function deleteRemote(collectionName: CollectionName, id: string): Promise<void> {
+  if (!isFirebaseConfigured || !db) return;
+  const userId = currentScopeUser();
+  if (!userId) return;
+
+  await deleteDoc(doc(db, COLLECTIONS[collectionName], id));
+}
+
+async function fetchRemoteCollection<T>(collectionName: CollectionName): Promise<T[]> {
+  if (!isFirebaseConfigured || !db) return [];
+  const userId = currentScopeUser();
+  if (!userId) return [];
+
+  const q = query(collection(db, COLLECTIONS[collectionName]), where('userId', '==', userId));
+  const snapshot = await getDocs(q);
+  return snapshot.docs.map((docSnap) => docSnap.data() as T);
+}
+
+export function setStorageScopeUser(userId: string | null): void {
+  storageScopeUser = userId;
+}
+
+export async function initializeUserDataSync(userId: string): Promise<void> {
+  setStorageScopeUser(userId);
+
+  if (!isFirebaseConfigured || !db) return;
+
+  await setDoc(
+    doc(db, COLLECTIONS.users, userId),
+    {
+      id: userId,
+      lastSeenAt: now(),
+      updatedAt: now(),
+    },
+    { merge: true }
+  );
+
+  const [conversations, topics, quizzes, notes, progress] = await Promise.all([
+    fetchRemoteCollection<Conversation>('conversations'),
+    fetchRemoteCollection<Topic>('topics'),
+    fetchRemoteCollection<Quiz>('quizzes'),
+    fetchRemoteCollection<Note>('notes'),
+    fetchRemoteCollection<ProgressStats>('progress'),
+  ]);
+
+  if (conversations.length > 0) {
+    writeConversations(conversations.sort((a, b) => b.updatedAt - a.updatedAt));
+  }
+  if (topics.length > 0) {
+    writeTopics(topics.sort((a, b) => b.updatedAt - a.updatedAt));
+  }
+  if (quizzes.length > 0) {
+    writeQuizzes(quizzes.sort((a, b) => (b.createdAt ?? 0) - (a.createdAt ?? 0)));
+  }
+  if (notes.length > 0) {
+    writeNotes(notes.sort((a, b) => b.updatedAt - a.updatedAt));
+  }
+  if (progress.length > 0) {
+    writeStats(progress[0]);
+  }
+}
+
+export function clearLocalDataForCurrentScope(): void {
+  removeScopedRaw(CONV_KEY);
+  removeScopedRaw(TOPICS_KEY);
+  removeScopedRaw(QUIZZES_KEY);
+  removeScopedRaw(NOTES_KEY);
+  removeScopedRaw(STATS_KEY);
+  removeScopedRaw(ACTIVE_TOPIC_KEY);
+}
+
+export function getConversations(): Conversation[] {
+  const raw = readScopedRaw(CONV_KEY);
+  if (!raw) return [];
+  try {
+    const parsed = JSON.parse(raw) as LegacyConversation[];
+    return parsed.map(normalizeConversation);
+  } catch {
+    return [];
+  }
+}
+
+export function saveConversation(conv: Conversation): void {
+  const next = [conv, ...getConversations().filter((c) => c.id !== conv.id)];
+  writeConversations(next);
+  void upsertRemote('conversations', conv.id, conv as unknown as Record<string, unknown>);
+}
+
+export function createConversation(): Conversation {
+  return {
+    id: generateId(),
+    title: 'New Conversation',
+    messages: [],
+    createdAt: now(),
+    updatedAt: now(),
+  };
+}
+
+export function deleteConversation(id: string): void {
+  const convs = getConversations().filter((c) => c.id !== id);
+  writeConversations(convs);
+  void deleteRemote('conversations', id);
+}
+
 export function getTopics(): Topic[] {
-  const raw = localStorage.getItem(TOPICS_KEY);
+  const raw = readScopedRaw(TOPICS_KEY);
   if (!raw) return [];
   try {
     const parsed = JSON.parse(raw) as LegacyTopic[];
@@ -196,7 +366,7 @@ export function saveTopic(
     Partial<Pick<Topic, 'notes' | 'quizzes' | 'flashcards' | 'completedSteps' | 'diagram'>>
 ): Topic {
   const topics = getTopics();
-  const now = Date.now();
+  const tNow = now();
   const newTopic: Topic = {
     ...topic,
     notes: topic.notes ?? null,
@@ -205,12 +375,20 @@ export function saveTopic(
     completedSteps: topic.completedSteps ?? [],
     diagram: topic.diagram ?? null,
     id: generateId(),
-    timestamp: now,
-    createdAt: now,
-    updatedAt: now,
+    timestamp: tNow,
+    createdAt: tNow,
+    updatedAt: tNow,
   };
-  localStorage.setItem(TOPICS_KEY, JSON.stringify([newTopic, ...topics]));
+  writeTopics([newTopic, ...topics]);
   incrementStat('topicsStudied');
+  void upsertRemote('topics', newTopic.id, newTopic as unknown as Record<string, unknown>);
+  if (newTopic.flashcards.length > 0) {
+    void upsertRemote('flashcards', newTopic.id, {
+      topicId: newTopic.id,
+      topicName: newTopic.name,
+      cards: newTopic.flashcards,
+    });
+  }
   return newTopic;
 }
 
@@ -224,9 +402,17 @@ export function updateTopic(
   topics[idx] = {
     ...topics[idx],
     ...updates,
-    updatedAt: Date.now(),
+    updatedAt: now(),
   };
-  localStorage.setItem(TOPICS_KEY, JSON.stringify(topics));
+  writeTopics(topics);
+  void upsertRemote('topics', id, topics[idx] as unknown as Record<string, unknown>);
+  if (updates.flashcards) {
+    void upsertRemote('flashcards', id, {
+      topicId: id,
+      topicName: topics[idx].name,
+      cards: updates.flashcards,
+    });
+  }
   return topics[idx];
 }
 
@@ -239,19 +425,19 @@ export function upsertTopicFromExplanation(name: string, explanation: string): T
     if (!updated) return existing;
     return updated;
   }
-  return saveTopic({ name: name.trim(), explanation, notes: null, quizzes: [] });
+  return saveTopic({ name: name.trim(), explanation });
 }
 
 export function setActiveTopic(id: string | null): void {
   if (!id) {
-    localStorage.removeItem(ACTIVE_TOPIC_KEY);
+    removeScopedRaw(ACTIVE_TOPIC_KEY);
     return;
   }
-  localStorage.setItem(ACTIVE_TOPIC_KEY, id);
+  writeScopedRaw(ACTIVE_TOPIC_KEY, id);
 }
 
 export function getActiveTopicId(): string | null {
-  return localStorage.getItem(ACTIVE_TOPIC_KEY);
+  return readScopedRaw(ACTIVE_TOPIC_KEY);
 }
 
 export function getActiveTopic(): Topic | null {
@@ -262,24 +448,23 @@ export function getActiveTopic(): Topic | null {
 
 export function deleteTopic(id: string): void {
   const topics = getTopics().filter((t) => t.id !== id);
-  localStorage.setItem(TOPICS_KEY, JSON.stringify(topics));
+  writeTopics(topics);
   if (getActiveTopicId() === id) {
     setActiveTopic(topics.length > 0 ? topics[0].id : null);
   }
+  void deleteRemote('topics', id);
+  void deleteRemote('flashcards', id);
 }
 
-// ─── Quizzes ──────────────────────────────────────────────────────────────────
-
-const QUIZZES_KEY = 'studyai_quizzes';
-
 export function getQuizzes(): Quiz[] {
-  const raw = localStorage.getItem(QUIZZES_KEY);
+  const raw = readScopedRaw(QUIZZES_KEY);
   return raw ? (JSON.parse(raw) as Quiz[]) : [];
 }
 
 export function saveQuiz(quiz: Quiz): void {
-  const quizzes = getQuizzes().filter((q) => q.id !== quiz.id);
-  localStorage.setItem(QUIZZES_KEY, JSON.stringify([quiz, ...quizzes]));
+  const quizzes = [quiz, ...getQuizzes().filter((q) => q.id !== quiz.id)];
+  writeQuizzes(quizzes);
+  void upsertRemote('quizzes', quiz.id, quiz as unknown as Record<string, unknown>);
 }
 
 export function createQuiz(topic: string, questions: QuizQuestion[]): Quiz {
@@ -290,7 +475,7 @@ export function createQuiz(topic: string, questions: QuizQuestion[]): Quiz {
     score: null,
     totalQuestions: questions.length,
     completedAt: null,
-    createdAt: Date.now(),
+    createdAt: now(),
   };
   saveQuiz(quiz);
   return quiz;
@@ -301,23 +486,21 @@ export function completeQuiz(id: string, score: number): void {
   const idx = quizzes.findIndex((q) => q.id === id);
   if (idx !== -1) {
     quizzes[idx].score = score;
-    quizzes[idx].completedAt = Date.now();
-    localStorage.setItem(QUIZZES_KEY, JSON.stringify(quizzes));
+    quizzes[idx].completedAt = now();
+    writeQuizzes(quizzes);
+    void upsertRemote('quizzes', id, quizzes[idx] as unknown as Record<string, unknown>);
     incrementStat('quizzesCompleted');
   }
 }
 
 export function deleteQuiz(id: string): void {
   const quizzes = getQuizzes().filter((q) => q.id !== id);
-  localStorage.setItem(QUIZZES_KEY, JSON.stringify(quizzes));
+  writeQuizzes(quizzes);
+  void deleteRemote('quizzes', id);
 }
 
-// ─── Notes ────────────────────────────────────────────────────────────────────
-
-const NOTES_KEY = 'studyai_notes';
-
 export function getNotes(): Note[] {
-  const raw = localStorage.getItem(NOTES_KEY);
+  const raw = readScopedRaw(NOTES_KEY);
   return raw ? (JSON.parse(raw) as Note[]) : [];
 }
 
@@ -326,11 +509,12 @@ export function saveNote(note: Omit<Note, 'id' | 'createdAt' | 'updatedAt'>): No
   const newNote: Note = {
     ...note,
     id: generateId(),
-    createdAt: Date.now(),
-    updatedAt: Date.now(),
+    createdAt: now(),
+    updatedAt: now(),
   };
-  localStorage.setItem(NOTES_KEY, JSON.stringify([newNote, ...notes]));
+  writeNotes([newNote, ...notes]);
   incrementStat('notesCreated');
+  void upsertRemote('notes', newNote.id, newNote as unknown as Record<string, unknown>);
   return newNote;
 }
 
@@ -339,22 +523,20 @@ export function updateNote(id: string, content: string): void {
   const idx = notes.findIndex((n) => n.id === id);
   if (idx !== -1) {
     notes[idx].content = content;
-    notes[idx].updatedAt = Date.now();
-    localStorage.setItem(NOTES_KEY, JSON.stringify(notes));
+    notes[idx].updatedAt = now();
+    writeNotes(notes);
+    void upsertRemote('notes', id, notes[idx] as unknown as Record<string, unknown>);
   }
 }
 
 export function deleteNote(id: string): void {
   const notes = getNotes().filter((n) => n.id !== id);
-  localStorage.setItem(NOTES_KEY, JSON.stringify(notes));
+  writeNotes(notes);
+  void deleteRemote('notes', id);
 }
 
-// ─── Progress Stats ───────────────────────────────────────────────────────────
-
-const STATS_KEY = 'studyai_stats';
-
 export function getStats(): ProgressStats {
-  const raw = localStorage.getItem(STATS_KEY);
+  const raw = readScopedRaw(STATS_KEY);
   if (raw) {
     const parsed = JSON.parse(raw) as Partial<ProgressStats>;
     return {
@@ -380,16 +562,23 @@ export function getStats(): ProgressStats {
   };
 }
 
+function persistStats(stats: ProgressStats): void {
+  writeStats(stats);
+  const userId = currentScopeUser();
+  if (userId) {
+    void upsertRemote('progress', userId, stats as unknown as Record<string, unknown>);
+  }
+}
+
 export function incrementStat(key: keyof Omit<ProgressStats, 'averageQuizScore' | 'lastStudyDate' | 'studyStreak' | 'conceptsLearned'>): void {
   const stats = getStats();
   stats[key] = (stats[key] as number) + 1;
-  // Recalculate average quiz score
   const completed = getQuizzes().filter((q) => q.score !== null);
   if (completed.length > 0) {
     const total = completed.reduce((sum, q) => sum + (q.score ?? 0), 0);
     stats.averageQuizScore = Math.round(total / completed.length);
   }
-  localStorage.setItem(STATS_KEY, JSON.stringify(stats));
+  persistStats(stats);
 }
 
 export function incrementAiInteraction(): void {
@@ -408,13 +597,13 @@ export function touchStudyStreak(): void {
     stats.studyStreak = 1;
   }
   stats.lastStudyDate = today;
-  localStorage.setItem(STATS_KEY, JSON.stringify(stats));
+  persistStats(stats);
 }
 
 export function incrementConceptsLearned(count: number = 1): void {
   const stats = getStats();
   stats.conceptsLearned = (stats.conceptsLearned || 0) + count;
-  localStorage.setItem(STATS_KEY, JSON.stringify(stats));
+  persistStats(stats);
 }
 
 export function completeTopicStep(topicId: string, step: string): void {

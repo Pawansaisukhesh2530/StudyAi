@@ -10,10 +10,11 @@ export interface PipelineStage {
 export const PIPELINE_STAGES: PipelineStage[] = [
   { key: 'explanation', label: 'Explanation', emoji: '📘', description: 'AI generates a structured overview' },
   { key: 'concepts', label: 'Key Concepts', emoji: '🧠', description: 'Core ideas extracted from explanation' },
+  { key: 'examples', label: 'Examples', emoji: '🌍', description: 'Real-world examples for understanding' },
   { key: 'notes', label: 'Notes', emoji: '📝', description: 'Detailed study notes generated' },
   { key: 'flashcards', label: 'Flashcards', emoji: '🎴', description: 'Memorization cards created' },
   { key: 'quiz', label: 'Quiz', emoji: '🎯', description: 'Test your knowledge' },
-  { key: 'revision', label: 'Revision', emoji: '🔁', description: 'Review and reinforce' },
+  { key: 'summary', label: 'Summary', emoji: '🏁', description: 'Review learning outcomes and next steps' },
 ];
 
 interface LearningPipelineProps {

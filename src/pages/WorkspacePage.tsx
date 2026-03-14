@@ -1,4 +1,4 @@
-import { useState, useRef } from 'react';
+import { useState, useRef, useEffect } from 'react';
 import {
   Search, Lightbulb, Loader2, HelpCircle, FileText, Save,
   Network, MessageCircle, Send, Zap, Baby, Globe, Shuffle,
@@ -32,6 +32,7 @@ import {
   incrementConceptsLearned,
   type Topic,
 } from '../services/storage';
+import { clearPendingAction, getPendingAction } from '../services/intentSystem';
 
 const SUGGESTIONS = ['Internet of Things', 'Quantum Computing', 'Machine Learning', 'Climate Change', 'Photosynthesis', 'World War II'];
 
@@ -94,7 +95,15 @@ export default function WorkspacePage() {
       const text = await reexplain(currentTopic.name, currentTopic.explanation, mode);
       incrementAiInteraction();
       const updated = updateTopic(currentTopic.id, { explanation: text });
-      if (updated) setCurrentTopic(updated);
+      if (mode === 'examples') {
+        completeTopicStep(currentTopic.id, 'examples');
+      }
+      if (updated) {
+        const nextSteps = mode === 'examples'
+          ? [...new Set([...(updated.completedSteps ?? []), 'examples'])]
+          : updated.completedSteps;
+        setCurrentTopic({ ...updated, completedSteps: nextSteps ?? [] });
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to reexplain.');
     } finally {
@@ -148,7 +157,12 @@ export default function WorkspacePage() {
       updateTopic(currentTopic.id, { quizzes: questions });
       createQuiz(currentTopic.name, questions);
       completeTopicStep(currentTopic.id, 'quiz');
-      setCurrentTopic((prev) => prev ? { ...prev, quizzes: questions, completedSteps: [...(prev.completedSteps ?? []), 'quiz'] } : prev);
+      completeTopicStep(currentTopic.id, 'summary');
+      setCurrentTopic((prev) => prev ? {
+        ...prev,
+        quizzes: questions,
+        completedSteps: [...new Set([...(prev.completedSteps ?? []), 'quiz', 'summary'])],
+      } : prev);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to generate quiz.');
     } finally {
@@ -189,6 +203,45 @@ export default function WorkspacePage() {
   })();
 
   const completedSteps = currentTopic?.completedSteps ?? [];
+
+  useEffect(() => {
+    const pending = getPendingAction();
+    if (!pending) return;
+
+    if (pending.intent === 'explain_topic') {
+      if (pending.topic) {
+        setTopic(pending.topic);
+      }
+      clearPendingAction();
+      const run = async () => {
+        const nextTopic = pending.topic?.trim() || topic.trim();
+        if (!nextTopic) return;
+        setTopic(nextTopic);
+        setLoadingExplanation(true);
+        setError(null);
+        try {
+          const text = await generateExplanation(nextTopic);
+          incrementAiInteraction();
+          const savedTopic = upsertTopicFromExplanation(nextTopic, text);
+          completeTopicStep(savedTopic.id, 'explanation');
+          incrementConceptsLearned(4);
+          setCurrentTopic({ ...savedTopic, completedSteps: [...(savedTopic.completedSteps ?? []), 'explanation'] });
+          setActiveTopic(savedTopic.id);
+        } catch (err) {
+          setError(err instanceof Error ? err.message : 'Failed to generate explanation.');
+        } finally {
+          setLoadingExplanation(false);
+        }
+      };
+      void run();
+      return;
+    }
+
+    if (pending.intent === 'save_topic') {
+      clearPendingAction();
+      if (currentTopic) handleSaveTopic();
+    }
+  }, [currentTopic]);
 
   return (
     <div className="page-container">
@@ -238,10 +291,11 @@ export default function WorkspacePage() {
           completedSteps={completedSteps}
           hasExplanation={!!currentTopic.explanation}
           onStageClick={(stage) => {
+            if (stage.key === 'explanation' || stage.key === 'concepts' || stage.key === 'examples') navigate('/workspace');
             if (stage.key === 'notes') navigate('/notes');
             else if (stage.key === 'flashcards') navigate('/flashcards');
             else if (stage.key === 'quiz') navigate('/quizzes');
-            else if (stage.key === 'revision') navigate('/quizzes');
+            else if (stage.key === 'summary') navigate('/progress');
           }}
         />
       )}

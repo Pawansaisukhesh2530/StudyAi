@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { Settings, Key, Trash2, AlertTriangle } from 'lucide-react';
+import { clearLocalDataForCurrentScope } from '../services/storage';
 
 export default function SettingsPage() {
   const [apiKey, setApiKey] = useState(() => localStorage.getItem('studyai_api_key') ?? '');
@@ -18,14 +19,7 @@ export default function SettingsPage() {
   }
 
   function handleClearData() {
-    const keys = [
-      'studyai_conversations',
-      'studyai_topics',
-      'studyai_quizzes',
-      'studyai_notes',
-      'studyai_stats',
-    ];
-    keys.forEach((k) => localStorage.removeItem(k));
+    clearLocalDataForCurrentScope();
     setShowClearConfirm(false);
     window.location.reload();
   }

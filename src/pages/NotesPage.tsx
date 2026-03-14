@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { FileText, Loader2, Edit3, Check, X } from 'lucide-react';
 import MarkdownRenderer from '../components/MarkdownRenderer';
 import { generateNotes } from '../services/geminiService';
@@ -11,6 +11,7 @@ import {
   incrementAiInteraction,
   type Topic,
 } from '../services/storage';
+import { clearPendingAction, getPendingAction } from '../services/intentSystem';
 
 export default function NotesPage() {
   const [topics, setTopics] = useState<Topic[]>(() => getTopics());
@@ -22,9 +23,31 @@ export default function NotesPage() {
   const [error, setError] = useState<string | null>(null);
   const [editing, setEditing] = useState(false);
   const [editContent, setEditContent] = useState('');
+  const commandRanRef = useRef(false);
 
   const selectedTopic = topics.find((t) => t.id === selectedTopicId) ?? null;
   const activeNotes = selectedTopic?.notes ?? null;
+
+  useEffect(() => {
+    if (commandRanRef.current) return;
+    const pending = getPendingAction();
+    if (!pending || pending.intent !== 'generate_notes') return;
+
+    commandRanRef.current = true;
+
+    if (pending.topic) {
+      const byName = topics.find((t) => t.name.toLowerCase().trim() === pending.topic?.toLowerCase().trim());
+      if (byName) {
+        setSelectedTopicId(byName.id);
+        setActiveTopic(byName.id);
+      }
+    }
+
+    clearPendingAction();
+    setTimeout(() => {
+      void handleGenerate();
+    }, 0);
+  }, [topics]);
 
   async function handleGenerate() {
     if (!selectedTopic) return;

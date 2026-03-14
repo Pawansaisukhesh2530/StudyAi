@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { HelpCircle, Loader2, ChevronDown, ChevronUp, Trophy } from 'lucide-react';
 import { generateQuiz, type QuizQuestion } from '../services/geminiService';
 import {
@@ -11,6 +11,7 @@ import {
   incrementAiInteraction,
   type Topic,
 } from '../services/storage';
+import { clearPendingAction, getPendingAction } from '../services/intentSystem';
 
 export default function QuizzesPage() {
   const [topics, setTopics] = useState<Topic[]>(() => getTopics());
@@ -23,6 +24,7 @@ export default function QuizzesPage() {
   const [error, setError] = useState<string | null>(null);
   const [answers, setAnswers] = useState<Record<number, number>>({});
   const [submitted, setSubmitted] = useState(false);
+  const commandRanRef = useRef(false);
 
   const selectedTopic = useMemo(
     () => topics.find((t) => t.id === selectedTopicId) ?? null,
@@ -30,6 +32,27 @@ export default function QuizzesPage() {
   );
 
   const activeQuestions = selectedTopic?.quizzes ?? [];
+
+  useEffect(() => {
+    if (commandRanRef.current) return;
+    const pending = getPendingAction();
+    if (!pending || pending.intent !== 'generate_quiz') return;
+
+    commandRanRef.current = true;
+
+    if (pending.topic) {
+      const byName = topics.find((t) => t.name.toLowerCase().trim() === pending.topic?.toLowerCase().trim());
+      if (byName) {
+        setSelectedTopicId(byName.id);
+        setActiveTopic(byName.id);
+      }
+    }
+
+    clearPendingAction();
+    setTimeout(() => {
+      void handleGenerateFromTopic();
+    }, 0);
+  }, [topics]);
 
   async function handleGenerateFromTopic() {
     if (!selectedTopic) return;
