@@ -8,13 +8,17 @@ import {
   BarChart2,
   Settings,
   GraduationCap,
+  Rocket,
+  CreditCard,
 } from 'lucide-react';
 
 const navItems = [
   { to: '/tutor', icon: MessageSquare, label: 'AI Tutor' },
   { to: '/workspace', icon: Layers, label: 'Workspace' },
+  { to: '/learn', icon: Rocket, label: 'Learning Mode' },
   { to: '/topics', icon: BookOpen, label: 'My Topics' },
   { to: '/notes', icon: FileText, label: 'Notes' },
+  { to: '/flashcards', icon: CreditCard, label: 'Flashcards' },
   { to: '/quizzes', icon: HelpCircle, label: 'Quizzes' },
   { to: '/progress', icon: BarChart2, label: 'Progress' },
   { to: '/settings', icon: Settings, label: 'Settings' },

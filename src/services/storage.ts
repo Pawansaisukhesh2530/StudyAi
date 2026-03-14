@@ -19,6 +19,9 @@ export interface Topic {
   explanation: string;
   notes: string | null;
   quizzes: QuizQuestion[];
+  flashcards: Flashcard[];
+  completedSteps: string[];
+  diagram: string | null;
   timestamp: number;
   createdAt: number;
   updatedAt: number;
@@ -29,6 +32,12 @@ export interface QuizQuestion {
   options: string[];
   correctIndex: number;
   explanation: string;
+}
+
+export interface Flashcard {
+  id: string;
+  front: string;
+  back: string;
 }
 
 export interface Quiz {
@@ -55,6 +64,9 @@ export interface ProgressStats {
   notesCreated: number;
   aiInteractions: number;
   averageQuizScore: number;
+  studyStreak: number;
+  lastStudyDate: string | null;
+  conceptsLearned: number;
 }
 
 function generateId(): string {
@@ -143,6 +155,9 @@ interface LegacyTopic {
   explanation?: string;
   notes?: string | null;
   quizzes?: QuizQuestion[];
+  flashcards?: Flashcard[];
+  completedSteps?: string[];
+  diagram?: string | null;
   timestamp?: number;
   createdAt?: number;
   updatedAt?: number;
@@ -156,6 +171,9 @@ function normalizeTopic(topic: LegacyTopic, idx: number): Topic {
     explanation: topic.explanation ?? '',
     notes: topic.notes ?? null,
     quizzes: Array.isArray(topic.quizzes) ? topic.quizzes : [],
+    flashcards: Array.isArray(topic.flashcards) ? topic.flashcards : [],
+    completedSteps: Array.isArray(topic.completedSteps) ? topic.completedSteps : [],
+    diagram: topic.diagram ?? null,
     timestamp: topic.timestamp ?? created,
     createdAt: created,
     updatedAt: topic.updatedAt ?? created,
@@ -174,8 +192,8 @@ export function getTopics(): Topic[] {
 }
 
 export function saveTopic(
-  topic: Omit<Topic, 'id' | 'createdAt' | 'updatedAt' | 'timestamp'> &
-    Partial<Pick<Topic, 'notes' | 'quizzes'>>
+  topic: Omit<Topic, 'id' | 'createdAt' | 'updatedAt' | 'timestamp' | 'notes' | 'quizzes' | 'flashcards' | 'completedSteps' | 'diagram'> &
+    Partial<Pick<Topic, 'notes' | 'quizzes' | 'flashcards' | 'completedSteps' | 'diagram'>>
 ): Topic {
   const topics = getTopics();
   const now = Date.now();
@@ -183,6 +201,9 @@ export function saveTopic(
     ...topic,
     notes: topic.notes ?? null,
     quizzes: topic.quizzes ?? [],
+    flashcards: topic.flashcards ?? [],
+    completedSteps: topic.completedSteps ?? [],
+    diagram: topic.diagram ?? null,
     id: generateId(),
     timestamp: now,
     createdAt: now,
@@ -195,7 +216,7 @@ export function saveTopic(
 
 export function updateTopic(
   id: string,
-  updates: Partial<Pick<Topic, 'name' | 'explanation' | 'notes' | 'quizzes'>>
+  updates: Partial<Pick<Topic, 'name' | 'explanation' | 'notes' | 'quizzes' | 'flashcards' | 'completedSteps' | 'diagram'>>
 ): Topic | null {
   const topics = getTopics();
   const idx = topics.findIndex((t) => t.id === id);
@@ -334,17 +355,32 @@ const STATS_KEY = 'studyai_stats';
 
 export function getStats(): ProgressStats {
   const raw = localStorage.getItem(STATS_KEY);
-  if (raw) return JSON.parse(raw) as ProgressStats;
+  if (raw) {
+    const parsed = JSON.parse(raw) as Partial<ProgressStats>;
+    return {
+      topicsStudied: parsed.topicsStudied ?? 0,
+      quizzesCompleted: parsed.quizzesCompleted ?? 0,
+      notesCreated: parsed.notesCreated ?? 0,
+      aiInteractions: parsed.aiInteractions ?? 0,
+      averageQuizScore: parsed.averageQuizScore ?? 0,
+      studyStreak: parsed.studyStreak ?? 0,
+      lastStudyDate: parsed.lastStudyDate ?? null,
+      conceptsLearned: parsed.conceptsLearned ?? 0,
+    };
+  }
   return {
     topicsStudied: 0,
     quizzesCompleted: 0,
     notesCreated: 0,
     aiInteractions: 0,
     averageQuizScore: 0,
+    studyStreak: 0,
+    lastStudyDate: null,
+    conceptsLearned: 0,
   };
 }
 
-export function incrementStat(key: keyof Omit<ProgressStats, 'averageQuizScore'>): void {
+export function incrementStat(key: keyof Omit<ProgressStats, 'averageQuizScore' | 'lastStudyDate' | 'studyStreak' | 'conceptsLearned'>): void {
   const stats = getStats();
   stats[key] = (stats[key] as number) + 1;
   // Recalculate average quiz score
@@ -358,4 +394,43 @@ export function incrementStat(key: keyof Omit<ProgressStats, 'averageQuizScore'>
 
 export function incrementAiInteraction(): void {
   incrementStat('aiInteractions');
+  touchStudyStreak();
+}
+
+export function touchStudyStreak(): void {
+  const stats = getStats();
+  const today = new Date().toISOString().slice(0, 10);
+  if (stats.lastStudyDate === today) return;
+  const yesterday = new Date(Date.now() - 86400000).toISOString().slice(0, 10);
+  if (stats.lastStudyDate === yesterday) {
+    stats.studyStreak = (stats.studyStreak || 0) + 1;
+  } else {
+    stats.studyStreak = 1;
+  }
+  stats.lastStudyDate = today;
+  localStorage.setItem(STATS_KEY, JSON.stringify(stats));
+}
+
+export function incrementConceptsLearned(count: number = 1): void {
+  const stats = getStats();
+  stats.conceptsLearned = (stats.conceptsLearned || 0) + count;
+  localStorage.setItem(STATS_KEY, JSON.stringify(stats));
+}
+
+export function completeTopicStep(topicId: string, step: string): void {
+  const topic = getTopics().find((t) => t.id === topicId);
+  if (!topic) return;
+  const completedSteps = topic.completedSteps ?? [];
+  if (!completedSteps.includes(step)) {
+    updateTopic(topicId, { completedSteps: [...completedSteps, step] });
+  }
+}
+
+export function getTopicsMastered(): number {
+  const quizzes = getQuizzes();
+  const masteredTopics = new Set<string>();
+  quizzes.forEach((q) => {
+    if (q.score !== null && q.score >= 70) masteredTopics.add(q.topic.toLowerCase().trim());
+  });
+  return masteredTopics.size;
 }

@@ -13,6 +13,27 @@ export interface QuizQuestion {
   explanation: string;
 }
 
+export interface Flashcard {
+  id: string;
+  front: string;
+  back: string;
+}
+
+export type ExplainMode = 'simpler' | 'eli5' | 'examples' | 'analogies';
+
+export interface DiagramNode {
+  id: string;
+  label: string;
+}
+
+export interface DiagramData {
+  type: 'flow' | 'concept';
+  title: string;
+  nodes: string[];
+  edges: [string, string][];
+  center?: string;
+}
+
 const MODEL_CANDIDATES = [
   (import.meta.env.VITE_GEMINI_MODEL as string) || 'gemini-2.5-flash',
   'gemini-2.5-flash',
@@ -211,6 +232,23 @@ function fallbackNotes(topic: string): string {
   );
 }
 
+function fallbackFlashcards(topic: string, count: number): Flashcard[] {
+  return Array.from({ length: Math.min(count, 6) }, (_, i) => ({
+    id: String(i + 1),
+    front: `What is a key concept of ${topic}? (${i + 1})`,
+    back: `${topic} involves understanding core principles and applying them to real-world situations. Review the explanation for details.`,
+  }));
+}
+
+function fallbackDiagram(topic: string): DiagramData {
+  return {
+    type: 'flow',
+    title: `${topic} Overview`,
+    nodes: ['Introduction', 'Core Concepts', 'Applications', 'Summary'],
+    edges: [['Introduction', 'Core Concepts'], ['Core Concepts', 'Applications'], ['Applications', 'Summary']],
+  };
+}
+
 function fallbackQuiz(topic: string, count: number): QuizQuestion[] {
   const total = Math.max(1, Math.min(10, count));
   return Array.from({ length: total }, (_, idx) => ({
@@ -246,15 +284,29 @@ export async function requestTutorReply(
 }
 
 export async function generateExplanation(topic: string): Promise<string> {
-  const prompt = `You are an expert tutor. Generate a comprehensive explanation for the topic: "${topic}".
-Include:
-- A clear definition
-- Key concepts and ideas
-- How it works (with examples)
-- Why it matters
-- A short summary
+  const prompt = `You are an expert tutor. Generate a well-structured educational explanation for the topic: "${topic}".
 
-Format with headings, bullet points, and examples. Be thorough but student-friendly.`;
+Format your response EXACTLY using these section headers:
+
+## Topic Overview
+[Write a clear, engaging 2-3 sentence overview of the topic.]
+
+## Key Concepts
+- **[Concept Name]**: [Clear definition]
+- **[Concept Name]**: [Clear definition]
+- **[Concept Name]**: [Clear definition]
+(List 4-6 key concepts)
+
+## Real-World Example
+[Explain one concrete, relatable real-world example that illustrates the topic clearly.]
+
+## Key Takeaways
+- [Most important point 1]
+- [Most important point 2]
+- [Most important point 3]
+- [Most important point 4]
+
+Be thorough, student-friendly, and educational.`;
 
   try {
     return await requestGeminiText(prompt);
@@ -326,5 +378,111 @@ Make sure questions are educational, clear, and appropriately challenging for st
     return JSON.parse(cleaned) as QuizQuestion[];
   } catch {
     throw new Error('Failed to parse quiz response from AI. Please try again.');
+  }
+}
+
+export async function generateFlashcards(topic: string, count: number = 8): Promise<Flashcard[]> {
+  const prompt = `Generate exactly ${count} flashcards for studying the topic: "${topic}".
+
+Return ONLY valid JSON array (no markdown, no extra text), like:
+[
+  { "id": "1", "front": "Question or term?", "back": "Answer or definition." }
+]
+
+Make them educational, clear, and progressively covering the key concepts of ${topic}.`;
+
+  let text = '';
+  try {
+    text = await requestGeminiText(prompt);
+  } catch (error) {
+    if (isRateLimitError(error) || isModelUnavailableError(error)) {
+      return fallbackFlashcards(topic, count);
+    }
+    throw error;
+  }
+  const cleaned = text.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '').trim();
+  try {
+    return JSON.parse(cleaned) as Flashcard[];
+  } catch {
+    throw new Error('Failed to parse flashcards from AI. Please try again.');
+  }
+}
+
+export async function generateDiagram(topic: string): Promise<DiagramData> {
+  const prompt = `Generate a concept diagram for: "${topic}".
+
+Return ONLY valid JSON (no markdown), in this format:
+{
+  "type": "flow",
+  "title": "${topic} Architecture",
+  "nodes": ["Node1", "Node2", "Node3", "Node4"],
+  "edges": [["Node1", "Node2"], ["Node2", "Node3"], ["Node3", "Node4"]]
+}
+
+Rules:
+- Use "flow" type for linear processes (A→B→C→D)
+- Use "concept" type for hub-and-spoke maps (center connected to all nodes), and add a "center" field
+- Keep node labels short (1-3 words)
+- Use 4-7 nodes maximum
+- Make edges meaningful and directional`;
+
+  let text = '';
+  try {
+    text = await requestGeminiText(prompt);
+  } catch (error) {
+    if (isRateLimitError(error) || isModelUnavailableError(error)) {
+      return fallbackDiagram(topic);
+    }
+    throw error;
+  }
+  const cleaned = text.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '').trim();
+  try {
+    return JSON.parse(cleaned) as DiagramData;
+  } catch {
+    return fallbackDiagram(topic);
+  }
+}
+
+export async function reexplain(topic: string, currentExplanation: string, mode: ExplainMode): Promise<string> {
+  const modeInstructions: Record<ExplainMode, string> = {
+    simpler: 'Explain this more simply. Use shorter sentences and simpler vocabulary.',
+    eli5: 'Explain this like I am 5 years old. Use very simple language and fun analogies a child would understand.',
+    examples: 'Explain this using lots of real-world examples. Give 3-4 concrete, relatable examples.',
+    analogies: 'Explain this using creative analogies and comparisons. Compare it to everyday things people know well.',
+  };
+
+  const prompt = `Topic: "${topic}"
+
+Current explanation:
+${currentExplanation.slice(0, 1000)}
+
+${modeInstructions[mode]}
+
+Format the response with the same ## section headers (Topic Overview, Key Concepts, Real-World Example, Key Takeaways) but adapted to the style requested.`;
+
+  try {
+    return await requestGeminiText(prompt);
+  } catch (error) {
+    if (isRateLimitError(error) || isModelUnavailableError(error)) {
+      return fallbackExplanation(topic);
+    }
+    throw error;
+  }
+}
+
+export async function generateFollowUpAnswer(topic: string, question: string): Promise<string> {
+  const prompt = `You are a helpful tutor. The student is studying: "${topic}".
+
+They ask: "${question}"
+
+Answer their question clearly and concisely, specifically in the context of ${topic}. Use bullet points or short paragraphs. Be educational and student-friendly.`;
+
+  try {
+    return await requestGeminiText(prompt, { maxOutputTokens: 1024 });
+  } catch (error) {
+    if (isRateLimitError(error) || isModelUnavailableError(error)) {
+      return `> Currently in fallback mode.\n\nGreat question about **${topic}**! \n\n- This relates to the core concepts we explored.\n- Try revisiting the Key Concepts section for more context.\n- The real-world example may also help clarify this.`;
+    }
+    throw error;
   }
 }

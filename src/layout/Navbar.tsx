@@ -4,8 +4,10 @@ import { Menu, GraduationCap } from 'lucide-react';
 const titles: Record<string, string> = {
   '/tutor': 'AI Tutor',
   '/workspace': 'Learning Workspace',
+  '/learn': 'Learning Mode',
   '/topics': 'My Topics',
   '/notes': 'Notes',
+  '/flashcards': 'Flashcards',
   '/quizzes': 'Quizzes',
   '/progress': 'Progress',
   '/settings': 'Settings',
