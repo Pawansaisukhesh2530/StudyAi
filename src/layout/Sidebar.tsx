@@ -13,8 +13,8 @@ import {
 } from 'lucide-react';
 
 const navItems = [
-  { to: '/tutor', icon: MessageSquare, label: 'AI Tutor' },
-  { to: '/workspace', icon: Layers, label: 'Workspace' },
+  { to: '/tutor', icon: MessageSquare, label: 'AI Command Center' },
+  { to: '/workspace', icon: Layers, label: 'Topic Workspace' },
   { to: '/learn', icon: Rocket, label: 'Learning Mode' },
   { to: '/topics', icon: BookOpen, label: 'My Topics' },
   { to: '/notes', icon: FileText, label: 'Notes' },

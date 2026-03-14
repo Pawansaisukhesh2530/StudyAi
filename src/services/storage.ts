@@ -47,8 +47,21 @@ export interface QuizQuestion {
 
 export interface Flashcard {
   id: string;
-  front: string;
-  back: string;
+  question: string;
+  answer: string;
+  createdAt?: number;
+  updatedAt?: number;
+}
+
+interface RemoteFlashcardRecord {
+  id: string;
+  userId: string;
+  topicId: string;
+  topicName: string;
+  question: string;
+  answer: string;
+  createdAt?: number;
+  updatedAt?: number;
 }
 
 export interface Quiz {
@@ -131,12 +144,35 @@ interface LegacyTopic {
   updatedAt?: number;
 }
 
+interface LegacyFlashcard {
+  id?: string;
+  question?: string;
+  answer?: string;
+  front?: string;
+  back?: string;
+  createdAt?: number;
+  updatedAt?: number;
+}
+
 function now(): number {
   return Date.now();
 }
 
 function generateId(): string {
   return `${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
+}
+
+function normalizeFlashcard(card: LegacyFlashcard, idx: number): Flashcard {
+  const question = card.question ?? card.front ?? '';
+  const answer = card.answer ?? card.back ?? '';
+  const createdAt = card.createdAt ?? now();
+  return {
+    id: card.id ?? `${now()}-card-${idx}`,
+    question,
+    answer,
+    createdAt,
+    updatedAt: card.updatedAt ?? createdAt,
+  };
 }
 
 function currentScopeUser(): string | null {
@@ -200,7 +236,7 @@ function normalizeTopic(topic: LegacyTopic, idx: number): Topic {
     explanation: topic.explanation ?? '',
     notes: topic.notes ?? null,
     quizzes: Array.isArray(topic.quizzes) ? topic.quizzes : [],
-    flashcards: Array.isArray(topic.flashcards) ? topic.flashcards : [],
+    flashcards: Array.isArray(topic.flashcards) ? topic.flashcards.map(normalizeFlashcard) : [],
     completedSteps: Array.isArray(topic.completedSteps) ? topic.completedSteps : [],
     diagram: topic.diagram ?? null,
     timestamp: topic.timestamp ?? created,
@@ -254,6 +290,60 @@ async function deleteRemote(collectionName: CollectionName, id: string): Promise
   await deleteDoc(doc(db, COLLECTIONS[collectionName], id));
 }
 
+async function deleteRemoteFlashcardsForTopic(topicId: string): Promise<void> {
+  if (!isFirebaseConfigured || !db) return;
+  const firestore = db;
+  const userId = currentScopeUser();
+  if (!userId) return;
+
+  const q = query(
+    collection(firestore, COLLECTIONS.flashcards),
+    where('userId', '==', userId),
+    where('topicId', '==', topicId)
+  );
+  const snapshot = await getDocs(q);
+  await Promise.all(snapshot.docs.map((docSnap) => deleteDoc(doc(firestore, COLLECTIONS.flashcards, docSnap.id))));
+}
+
+async function syncTopicFlashcards(topicId: string, topicName: string, cards: Flashcard[]): Promise<void> {
+  if (!isFirebaseConfigured || !db) return;
+  const firestore = db;
+  const userId = currentScopeUser();
+  if (!userId) return;
+
+  const existingQuery = query(
+    collection(firestore, COLLECTIONS.flashcards),
+    where('userId', '==', userId),
+    where('topicId', '==', topicId)
+  );
+  const existingSnapshot = await getDocs(existingQuery);
+  const keepIds = new Set(cards.map((card) => card.id));
+
+  const deletes = existingSnapshot.docs
+    .filter((docSnap) => !keepIds.has(docSnap.id))
+    .map((docSnap) => deleteDoc(doc(firestore, COLLECTIONS.flashcards, docSnap.id)));
+
+  const writes = cards.map((card) => {
+    const cardCreatedAt = card.createdAt ?? now();
+    return setDoc(
+      doc(firestore, COLLECTIONS.flashcards, card.id),
+      {
+        id: card.id,
+        userId,
+        topicId,
+        topicName,
+        question: card.question,
+        answer: card.answer,
+        createdAt: cardCreatedAt,
+        updatedAt: now(),
+      },
+      { merge: true }
+    );
+  });
+
+  await Promise.all([...deletes, ...writes]);
+}
+
 async function fetchRemoteCollection<T>(collectionName: CollectionName): Promise<T[]> {
   if (!isFirebaseConfigured || !db) return [];
   const userId = currentScopeUser();
@@ -268,7 +358,10 @@ export function setStorageScopeUser(userId: string | null): void {
   storageScopeUser = userId;
 }
 
-export async function initializeUserDataSync(userId: string): Promise<void> {
+export async function initializeUserDataSync(
+  userId: string,
+  profile?: { email?: string | null; name?: string | null }
+): Promise<void> {
   setStorageScopeUser(userId);
 
   if (!isFirebaseConfigured || !db) return;
@@ -277,25 +370,48 @@ export async function initializeUserDataSync(userId: string): Promise<void> {
     doc(db, COLLECTIONS.users, userId),
     {
       id: userId,
+      email: profile?.email ?? null,
+      name: profile?.name ?? null,
       lastSeenAt: now(),
       updatedAt: now(),
     },
     { merge: true }
   );
 
-  const [conversations, topics, quizzes, notes, progress] = await Promise.all([
+  const [conversations, topics, quizzes, notes, progress, flashcards] = await Promise.all([
     fetchRemoteCollection<Conversation>('conversations'),
     fetchRemoteCollection<Topic>('topics'),
     fetchRemoteCollection<Quiz>('quizzes'),
     fetchRemoteCollection<Note>('notes'),
     fetchRemoteCollection<ProgressStats>('progress'),
+    fetchRemoteCollection<RemoteFlashcardRecord>('flashcards'),
   ]);
 
   if (conversations.length > 0) {
     writeConversations(conversations.sort((a, b) => b.updatedAt - a.updatedAt));
   }
   if (topics.length > 0) {
-    writeTopics(topics.sort((a, b) => b.updatedAt - a.updatedAt));
+    const cardsByTopic = new Map<string, Flashcard[]>();
+    flashcards.forEach((card, idx) => {
+      if (!card.topicId) return;
+      const normalized = normalizeFlashcard(card, idx);
+      const existing = cardsByTopic.get(card.topicId) ?? [];
+      cardsByTopic.set(card.topicId, [...existing, normalized]);
+    });
+
+    const merged = topics
+      .map((topic, idx) => normalizeTopic(topic, idx))
+      .map((topic) => {
+        const remoteCards = cardsByTopic.get(topic.id);
+        if (!remoteCards || remoteCards.length === 0) return topic;
+        return {
+          ...topic,
+          flashcards: remoteCards,
+        };
+      })
+      .sort((a, b) => b.updatedAt - a.updatedAt);
+
+    writeTopics(merged);
   }
   if (quizzes.length > 0) {
     writeQuizzes(quizzes.sort((a, b) => (b.createdAt ?? 0) - (a.createdAt ?? 0)));
@@ -383,11 +499,7 @@ export function saveTopic(
   incrementStat('topicsStudied');
   void upsertRemote('topics', newTopic.id, newTopic as unknown as Record<string, unknown>);
   if (newTopic.flashcards.length > 0) {
-    void upsertRemote('flashcards', newTopic.id, {
-      topicId: newTopic.id,
-      topicName: newTopic.name,
-      cards: newTopic.flashcards,
-    });
+    void syncTopicFlashcards(newTopic.id, newTopic.name, newTopic.flashcards);
   }
   return newTopic;
 }
@@ -407,13 +519,83 @@ export function updateTopic(
   writeTopics(topics);
   void upsertRemote('topics', id, topics[idx] as unknown as Record<string, unknown>);
   if (updates.flashcards) {
-    void upsertRemote('flashcards', id, {
-      topicId: id,
-      topicName: topics[idx].name,
-      cards: updates.flashcards,
-    });
+    void syncTopicFlashcards(id, topics[idx].name, topics[idx].flashcards);
   }
   return topics[idx];
+}
+
+function normalizeFlashcardsInput(cards: Array<Partial<Flashcard> & { front?: string; back?: string }>): Flashcard[] {
+  return cards
+    .map((card, idx) => normalizeFlashcard(card, idx))
+    .filter((card) => card.question.trim() && card.answer.trim());
+}
+
+export function appendTopicFlashcards(
+  topicId: string,
+  cards: Array<Partial<Flashcard> & { front?: string; back?: string }>
+): Topic | null {
+  const topic = getTopics().find((item) => item.id === topicId);
+  if (!topic) return null;
+
+  const additions = normalizeFlashcardsInput(cards).map((card) => ({
+    ...card,
+    id: card.id || generateId(),
+    createdAt: card.createdAt ?? now(),
+    updatedAt: now(),
+  }));
+
+  if (additions.length === 0) return topic;
+
+  return updateTopic(topicId, {
+    flashcards: [...topic.flashcards, ...additions],
+  });
+}
+
+export function addFlashcardToTopic(topicId: string, question: string, answer: string): Topic | null {
+  const cleanedQuestion = question.trim();
+  const cleanedAnswer = answer.trim();
+  if (!cleanedQuestion || !cleanedAnswer) return null;
+
+  return appendTopicFlashcards(topicId, [
+    {
+      id: generateId(),
+      question: cleanedQuestion,
+      answer: cleanedAnswer,
+      createdAt: now(),
+      updatedAt: now(),
+    },
+  ]);
+}
+
+export function updateFlashcardInTopic(
+  topicId: string,
+  flashcardId: string,
+  updates: Partial<Pick<Flashcard, 'question' | 'answer'>>
+): Topic | null {
+  const topic = getTopics().find((item) => item.id === topicId);
+  if (!topic) return null;
+
+  const nextCards = topic.flashcards.map((card) => {
+    if (card.id !== flashcardId) return card;
+    return {
+      ...card,
+      question: updates.question?.trim() ?? card.question,
+      answer: updates.answer?.trim() ?? card.answer,
+      updatedAt: now(),
+    };
+  });
+
+  return updateTopic(topicId, { flashcards: nextCards });
+}
+
+export function deleteFlashcardFromTopic(topicId: string, flashcardId: string): Topic | null {
+  const topic = getTopics().find((item) => item.id === topicId);
+  if (!topic) return null;
+
+  const nextCards = topic.flashcards.filter((card) => card.id !== flashcardId);
+  const updated = updateTopic(topicId, { flashcards: nextCards });
+  void deleteRemote('flashcards', flashcardId);
+  return updated;
 }
 
 export function upsertTopicFromExplanation(name: string, explanation: string): Topic {
@@ -453,7 +635,7 @@ export function deleteTopic(id: string): void {
     setActiveTopic(topics.length > 0 ? topics[0].id : null);
   }
   void deleteRemote('topics', id);
-  void deleteRemote('flashcards', id);
+  void deleteRemoteFlashcardsForTopic(id);
 }
 
 export function getQuizzes(): Quiz[] {

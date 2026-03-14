@@ -26,12 +26,11 @@ const AuthContext = createContext<AuthContextValue | null>(null);
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(isFirebaseConfigured);
 
   useEffect(() => {
     if (!isFirebaseConfigured || !auth) {
       setStorageScopeUser(null);
-      setLoading(false);
       return;
     }
 
@@ -42,7 +41,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
       // Do not block auth readiness on Firestore sync failures.
       if (nextUser?.uid) {
-        void initializeUserDataSync(nextUser.uid).catch((error) => {
+        void initializeUserDataSync(nextUser.uid, {
+          email: nextUser.email,
+          name: nextUser.displayName,
+        }).catch((error) => {
           console.error('Failed to initialize user data sync:', error);
         });
       }

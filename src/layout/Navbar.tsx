@@ -3,8 +3,8 @@ import { Menu, GraduationCap, LogOut } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 
 const titles: Record<string, string> = {
-  '/tutor': 'AI Tutor',
-  '/workspace': 'Learning Workspace',
+  '/tutor': 'AI Command Center',
+  '/workspace': 'Topic Workspace',
   '/learn': 'Learning Mode',
   '/topics': 'My Topics',
   '/notes': 'Notes',

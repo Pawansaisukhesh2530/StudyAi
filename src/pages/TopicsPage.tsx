@@ -1,21 +1,20 @@
 import { useState } from 'react';
 import { BookOpen, Trash2, ChevronDown, ChevronUp } from 'lucide-react';
 import MarkdownRenderer from '../components/MarkdownRenderer';
-import { getTopics, deleteTopic, setActiveTopic, getActiveTopicId, type Topic } from '../services/storage';
+import { useTopicContext } from '../context/TopicContext';
 
 export default function TopicsPage() {
-  const [topics, setTopics] = useState<Topic[]>(() => getTopics());
-  const [expandedId, setExpandedId] = useState<string | null>(() => getActiveTopicId());
+  const { topics, currentTopicId, setCurrentTopicById, removeTopic } = useTopicContext();
+  const [expandedId, setExpandedId] = useState<string | null>(() => currentTopicId);
 
   function handleDelete(id: string) {
-    deleteTopic(id);
-    setTopics(getTopics());
+    removeTopic(id);
     if (expandedId === id) setExpandedId(null);
   }
 
   function handleSelectTopic(id: string) {
     setExpandedId(expandedId === id ? null : id);
-    setActiveTopic(id);
+    setCurrentTopicById(id);
   }
 
   return (

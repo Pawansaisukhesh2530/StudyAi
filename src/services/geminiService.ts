@@ -15,8 +15,8 @@ export interface QuizQuestion {
 
 export interface Flashcard {
   id: string;
-  front: string;
-  back: string;
+  question: string;
+  answer: string;
 }
 
 export type ExplainMode = 'simpler' | 'eli5' | 'examples' | 'analogies';
@@ -148,7 +148,12 @@ async function requestGeminiText(
     try {
       return await requestWithModelFallback(async (modelName) => {
         const genAI = new GoogleGenerativeAI(getApiKey());
-        const model = genAI.getGenerativeModel({ model: modelName });
+        const model = genAI.getGenerativeModel({
+          model: modelName,
+          generationConfig: {
+            maxOutputTokens: options?.maxOutputTokens ?? 2048,
+          },
+        });
 
         if (options?.history && options.history.length > 0) {
           const chat = model.startChat({
@@ -204,16 +209,31 @@ function fallbackExplanation(topic: string): string {
   return (
     fallbackNotice() +
     `# ${topic}\n\n` +
-    `## Definition\n` +
-    `- ${topic} is a topic best learned through clear concepts and examples.\n\n` +
+    `## Topic Overview\n` +
+    `- ${topic} is best learned through structured concepts, examples, and deliberate practice.\n` +
+    `- Strong understanding comes from connecting theory with real scenarios.\n\n` +
     `## Key Concepts\n` +
-    `- Start with terminology and core rules.\n` +
-    `- Connect each concept to a practical example.\n` +
-    `- Review with active recall.\n\n` +
-    `## Why It Matters\n` +
-    `- Understanding ${topic} improves analytical thinking and problem solving.\n\n` +
-    `## Summary\n` +
-    `- Learn basics, practice examples, test yourself, and revise.\n`
+    `- Start with foundational terminology and core rules.\n` +
+    `- Separate basics from advanced ideas to reduce confusion.\n` +
+    `- Link every concept to at least one practical application.\n` +
+    `- Use self-testing to verify understanding.\n\n` +
+    `## How It Works Step-by-Step\n` +
+    `1. Define the main goal of ${topic}.\n` +
+    `2. Split the topic into manageable sub-concepts.\n` +
+    `3. Learn each concept with examples and edge cases.\n` +
+    `4. Practice retrieval through questions and short summaries.\n\n` +
+    `## Common Misconceptions\n` +
+    `- Memorizing terms alone is enough: incorrect; you must apply concepts.\n` +
+    `- One long study session is better: incorrect; spaced sessions work better.\n` +
+    `- Difficulty means inability: incorrect; it often means the right learning zone.\n\n` +
+    `## Real-World Example\n` +
+    `- Apply ${topic} to a practical case, break it into components, and validate each decision step.\n\n` +
+    `## Exam and Interview Style Questions\n` +
+    `- What is the core objective of ${topic}?\n` +
+    `- How would you apply it in a practical scenario?\n` +
+    `- What are common mistakes and how do you avoid them?\n\n` +
+    `## Key Takeaways\n` +
+    `- Learn basics deeply, then apply with examples, then test and revise.\n`
   );
 }
 
@@ -234,10 +254,37 @@ function fallbackNotes(topic: string): string {
 
 function fallbackFlashcards(topic: string, count: number): Flashcard[] {
   return Array.from({ length: Math.min(count, 6) }, (_, i) => ({
-    id: String(i + 1),
-    front: `What is a key concept of ${topic}? (${i + 1})`,
-    back: `${topic} involves understanding core principles and applying them to real-world situations. Review the explanation for details.`,
+    id: `${Date.now()}-fallback-${i + 1}`,
+    question: `What is a key concept of ${topic}? (${i + 1})`,
+    answer: `${topic} involves understanding core principles and applying them to real-world situations. Review the explanation for details.`,
   }));
+}
+
+function normalizeGeneratedFlashcards(payload: unknown): Flashcard[] {
+  if (!Array.isArray(payload)) return [];
+
+  return payload
+    .map((raw, idx) => {
+      if (!raw || typeof raw !== 'object') return null;
+      const item = raw as {
+        id?: string;
+        question?: string;
+        answer?: string;
+        front?: string;
+        back?: string;
+      };
+
+      const question = (item.question ?? item.front ?? '').trim();
+      const answer = (item.answer ?? item.back ?? '').trim();
+      if (!question || !answer) return null;
+
+      return {
+        id: item.id?.trim() || `${Date.now()}-flashcard-${idx}`,
+        question,
+        answer,
+      };
+    })
+    .filter((item): item is Flashcard => Boolean(item));
 }
 
 function fallbackDiagram(topic: string): DiagramData {
@@ -284,21 +331,43 @@ export async function requestTutorReply(
 }
 
 export async function generateExplanation(topic: string): Promise<string> {
-  const prompt = `You are an expert tutor. Generate a well-structured educational explanation for the topic: "${topic}".
+  const prompt = `You are an expert tutor. Generate a deep, high-detail learning guide for the topic: "${topic}".
+
+Important quality requirements:
+- Write a detailed response between 900 and 1400 words.
+- Be precise, conceptually accurate, and student-friendly.
+- Use concrete examples and practical applications.
+- Avoid vague summaries.
 
 Format your response EXACTLY using these section headers:
 
 ## Topic Overview
-[Write a clear, engaging 2-3 sentence overview of the topic.]
+[Write a rich introduction with background, why the topic matters, and where it is used. 2-3 substantial paragraphs.]
 
 ## Key Concepts
 - **[Concept Name]**: [Clear definition]
 - **[Concept Name]**: [Clear definition]
 - **[Concept Name]**: [Clear definition]
-(List 4-6 key concepts)
+(List 8-12 key concepts with meaningful depth, not one-line bullets)
+
+## How It Works Step-by-Step
+[Break the topic into a logical sequence. Use numbered steps and explain each one clearly.]
+
+## Common Misconceptions
+- [Misconception]
+- [Why it is wrong]
+- [Correct understanding]
+
+Include at least 3 misconceptions.
 
 ## Real-World Example
-[Explain one concrete, relatable real-world example that illustrates the topic clearly.]
+[Explain 2-3 concrete, relatable real-world examples that illustrate the topic clearly.]
+
+## Exam and Interview Style Questions
+- [Question]
+- [Short model answer]
+
+Include at least 5 questions with high-quality model answers.
 
 ## Key Takeaways
 - [Most important point 1]
@@ -306,10 +375,12 @@ Format your response EXACTLY using these section headers:
 - [Most important point 3]
 - [Most important point 4]
 
-Be thorough, student-friendly, and educational.`;
+Include at least 8 key takeaways.
+
+Be thorough, structured, and educational.`;
 
   try {
-    return await requestGeminiText(prompt);
+    return await requestGeminiText(prompt, { maxOutputTokens: 4096 });
   } catch (error) {
     if (isRateLimitError(error) || isModelUnavailableError(error)) {
       return fallbackExplanation(topic);
@@ -339,7 +410,7 @@ A concise summary paragraph.
 Make notes thorough, well-organized, and student-friendly.`;
 
   try {
-    return await requestGeminiText(prompt);
+    return await requestGeminiText(prompt, { maxOutputTokens: 3072 });
   } catch (error) {
     if (isRateLimitError(error) || isModelUnavailableError(error)) {
       return fallbackNotes(topic);
@@ -365,7 +436,7 @@ Make sure questions are educational, clear, and appropriately challenging for st
 
   let text = '';
   try {
-    text = await requestGeminiText(prompt);
+    text = await requestGeminiText(prompt, { maxOutputTokens: 2048 });
   } catch (error) {
     if (isRateLimitError(error) || isModelUnavailableError(error)) {
       return fallbackQuiz(topic, count);
@@ -386,14 +457,14 @@ export async function generateFlashcards(topic: string, count: number = 8): Prom
 
 Return ONLY valid JSON array (no markdown, no extra text), like:
 [
-  { "id": "1", "front": "Question or term?", "back": "Answer or definition." }
+  { "question": "Question?", "answer": "Answer." }
 ]
 
 Make them educational, clear, and progressively covering the key concepts of ${topic}.`;
 
   let text = '';
   try {
-    text = await requestGeminiText(prompt);
+    text = await requestGeminiText(prompt, { maxOutputTokens: 2048 });
   } catch (error) {
     if (isRateLimitError(error) || isModelUnavailableError(error)) {
       return fallbackFlashcards(topic, count);
@@ -402,7 +473,12 @@ Make them educational, clear, and progressively covering the key concepts of ${t
   }
   const cleaned = text.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '').trim();
   try {
-    return JSON.parse(cleaned) as Flashcard[];
+    const parsed = JSON.parse(cleaned) as unknown;
+    const normalized = normalizeGeneratedFlashcards(parsed);
+    if (normalized.length === 0) {
+      throw new Error('No valid flashcards in AI response.');
+    }
+    return normalized;
   } catch {
     throw new Error('Failed to parse flashcards from AI. Please try again.');
   }
@@ -420,7 +496,7 @@ Return ONLY valid JSON (no markdown), in this format:
 }
 
 Rules:
-- Use "flow" type for linear processes (A→B→C→D)
+- Use "flow" type for linear processes (A?B?C?D)
 - Use "concept" type for hub-and-spoke maps (center connected to all nodes), and add a "center" field
 - Keep node labels short (1-3 words)
 - Use 4-7 nodes maximum
@@ -428,7 +504,7 @@ Rules:
 
   let text = '';
   try {
-    text = await requestGeminiText(prompt);
+    text = await requestGeminiText(prompt, { maxOutputTokens: 1024 });
   } catch (error) {
     if (isRateLimitError(error) || isModelUnavailableError(error)) {
       return fallbackDiagram(topic);
@@ -461,7 +537,7 @@ ${modeInstructions[mode]}
 Format the response with the same ## section headers (Topic Overview, Key Concepts, Real-World Example, Key Takeaways) but adapted to the style requested.`;
 
   try {
-    return await requestGeminiText(prompt);
+    return await requestGeminiText(prompt, { maxOutputTokens: 3072 });
   } catch (error) {
     if (isRateLimitError(error) || isModelUnavailableError(error)) {
       return fallbackExplanation(topic);

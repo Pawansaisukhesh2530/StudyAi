@@ -3,16 +3,21 @@ interface SkeletonProps {
   className?: string;
 }
 
+const SKELETON_LINE_WIDTHS = ['92%', '88%', '95%', '90%', '86%', '93%'];
+
 export function SkeletonText({ lines = 3, className = '' }: SkeletonProps) {
   return (
     <div className={`skeleton-text ${className}`}>
-      {Array.from({ length: lines }).map((_, i) => (
-        <div
-          key={i}
-          className="skeleton-line"
-          style={{ width: i === lines - 1 ? '65%' : `${85 + Math.random() * 15}%` }}
-        />
-      ))}
+      {Array.from({ length: lines }).map((_, i) => {
+        const width = i === lines - 1 ? '65%' : SKELETON_LINE_WIDTHS[i % SKELETON_LINE_WIDTHS.length];
+        return (
+          <div
+            key={i}
+            className="skeleton-line"
+            style={{ width }}
+          />
+        );
+      })}
     </div>
   );
 }

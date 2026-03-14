@@ -17,14 +17,14 @@ export default function FlashCard({ card, index, total }: FlashCardProps) {
         <div className="flashcard-face flashcard-face--front">
           <div className="flashcard-badge">{index + 1} / {total}</div>
           <div className="flashcard-label">Question</div>
-          <p className="flashcard-text">{card.front}</p>
+          <p className="flashcard-text">{card.question}</p>
           <div className="flashcard-hint">Click to reveal answer</div>
         </div>
         {/* Back */}
         <div className="flashcard-face flashcard-face--back">
           <div className="flashcard-badge">{index + 1} / {total}</div>
           <div className="flashcard-label flashcard-label--answer">Answer</div>
-          <p className="flashcard-text">{card.back}</p>
+          <p className="flashcard-text">{card.answer}</p>
           <div className="flashcard-hint">Click to flip back</div>
         </div>
       </div>

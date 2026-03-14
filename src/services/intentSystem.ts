@@ -4,6 +4,9 @@ export type StudyIntent =
   | 'generate_flashcards'
   | 'explain_topic'
   | 'learning_mode'
+  | 'add_flashcard'
+  | 'delete_flashcard'
+  | 'edit_flashcard'
   | 'save_topic'
   | 'chat';
 
@@ -15,6 +18,9 @@ export interface IntentResult {
 export interface PendingAction {
   intent: Exclude<StudyIntent, 'chat'>;
   topic?: string;
+  flashcardIndex?: number;
+  flashcardQuestion?: string;
+  flashcardAnswer?: string;
   sourceMessage: string;
   createdAt: number;
 }
@@ -26,6 +32,9 @@ const COMMAND_SUGGESTIONS: Array<{ label: string; command: string; intent: Study
   { label: 'Make Notes', command: 'Make notes for this topic', intent: 'generate_notes' },
   { label: 'Make Quiz', command: 'Create a quiz for this topic', intent: 'generate_quiz' },
   { label: 'Make Flashcards', command: 'Generate flashcards for this topic', intent: 'generate_flashcards' },
+  { label: 'Add Flashcards', command: 'Add another flashcard', intent: 'add_flashcard' },
+  { label: 'Delete Flashcard', command: 'Delete flashcard 2', intent: 'delete_flashcard' },
+  { label: 'Edit Flashcard', command: 'Edit flashcard 1', intent: 'edit_flashcard' },
   { label: 'Start Learning Mode', command: 'Start learning mode', intent: 'learning_mode' },
   { label: 'Save Topic', command: 'Save this topic', intent: 'save_topic' },
 ];
@@ -59,6 +68,18 @@ function extractTopic(input: string): string | null {
 export function detectIntent(message: string): IntentResult {
   const normalized = normalizeMessage(message);
 
+  if (/\b(delete|remove)\b.*\bflashcards?\b/.test(normalized)) {
+    return { intent: 'delete_flashcard', topic: extractTopic(message) };
+  }
+
+  if (/\b(edit|update|modify|change)\b.*\bflashcards?\b/.test(normalized)) {
+    return { intent: 'edit_flashcard', topic: extractTopic(message) };
+  }
+
+  if (/\b(add|append|another|more|one more)\b.*\bflashcards?\b/.test(normalized)) {
+    return { intent: 'add_flashcard', topic: extractTopic(message) };
+  }
+
   if (/\b(save|remember|bookmark)\b.*\b(topic|this)\b/.test(normalized)) {
     return { intent: 'save_topic', topic: extractTopic(message) };
   }
@@ -71,7 +92,10 @@ export function detectIntent(message: string): IntentResult {
     return { intent: 'generate_flashcards', topic: extractTopic(message) };
   }
 
-  if (/\b(quiz|test|mcq)\b/.test(normalized) && /\b(make|create|generate|build|prepare)\b/.test(normalized)) {
+  if (
+    (/\b(quiz|test|mcq)\b/.test(normalized) && /\b(make|create|generate|build|prepare)\b/.test(normalized)) ||
+    /\b(test me|quiz me|give me a quiz)\b/.test(normalized)
+  ) {
     return { intent: 'generate_quiz', topic: extractTopic(message) };
   }
 
@@ -93,6 +117,9 @@ export function routeForIntent(intent: Exclude<StudyIntent, 'chat'>): string {
     case 'generate_quiz':
       return '/quizzes';
     case 'generate_flashcards':
+    case 'add_flashcard':
+    case 'delete_flashcard':
+    case 'edit_flashcard':
       return '/flashcards';
     case 'learning_mode':
       return '/learn';
@@ -102,6 +129,23 @@ export function routeForIntent(intent: Exclude<StudyIntent, 'chat'>): string {
     default:
       return '/tutor';
   }
+}
+
+function extractFlashcardIndex(input: string): number | null {
+  const indexMatch = input.match(/flashcards?\s*(?:#|number\s*)?(\d+)/i);
+  if (!indexMatch?.[1]) return null;
+  const parsed = Number(indexMatch[1]);
+  if (!Number.isFinite(parsed) || parsed < 1) return null;
+  return parsed;
+}
+
+function extractQuestionAnswer(input: string): { question?: string; answer?: string } {
+  const questionMatch = input.match(/question\s*[:=-]\s*([^;\n]+)/i);
+  const answerMatch = input.match(/answer\s*[:=-]\s*([^;\n]+)/i);
+  return {
+    question: questionMatch?.[1]?.trim(),
+    answer: answerMatch?.[1]?.trim(),
+  };
 }
 
 export function getCommandSuggestions(input: string): Array<{ label: string; command: string; intent: StudyIntent }> {
@@ -114,7 +158,18 @@ export function getCommandSuggestions(input: string): Array<{ label: string; com
 }
 
 export function setPendingAction(action: PendingAction): void {
-  localStorage.setItem(PENDING_ACTION_KEY, JSON.stringify(action));
+  const flashcardIndex = extractFlashcardIndex(action.sourceMessage);
+  const qa = extractQuestionAnswer(action.sourceMessage);
+
+  localStorage.setItem(
+    PENDING_ACTION_KEY,
+    JSON.stringify({
+      ...action,
+      flashcardIndex: action.flashcardIndex ?? flashcardIndex ?? undefined,
+      flashcardQuestion: action.flashcardQuestion ?? qa.question,
+      flashcardAnswer: action.flashcardAnswer ?? qa.answer,
+    })
+  );
 }
 
 export function getPendingAction(): PendingAction | null {

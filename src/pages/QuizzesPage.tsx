@@ -1,24 +1,17 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { HelpCircle, Loader2, ChevronDown, ChevronUp, Trophy } from 'lucide-react';
 import { generateQuiz, type QuizQuestion } from '../services/geminiService';
 import {
-  getTopics,
-  getActiveTopicId,
-  setActiveTopic,
-  updateTopic,
   createQuiz,
   completeQuiz,
   incrementAiInteraction,
-  type Topic,
 } from '../services/storage';
 import { clearPendingAction, getPendingAction } from '../services/intentSystem';
+import { useTopicContext } from '../context/TopicContext';
 
 export default function QuizzesPage() {
-  const [topics, setTopics] = useState<Topic[]>(() => getTopics());
-  const [selectedTopicId, setSelectedTopicId] = useState<string | null>(() => {
-    const active = getActiveTopicId();
-    return active ?? (getTopics()[0]?.id ?? null);
-  });
+  const { topics, currentTopicId, setCurrentTopicById, updateTopicById } = useTopicContext();
+  const [selectedTopicId, setSelectedTopicId] = useState<string | null>(() => currentTopicId ?? topics[0]?.id ?? null);
   const [questionCount, setQuestionCount] = useState(5);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -33,6 +26,23 @@ export default function QuizzesPage() {
 
   const activeQuestions = selectedTopic?.quizzes ?? [];
 
+  const handleGenerateFromTopic = useCallback(async () => {
+    if (!selectedTopic) return;
+    setLoading(true);
+    setError(null);
+    try {
+      const questions: QuizQuestion[] = await generateQuiz(selectedTopic.name, questionCount);
+      incrementAiInteraction();
+      updateTopicById(selectedTopic.id, { quizzes: questions });
+      setAnswers({});
+      setSubmitted(false);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to generate quiz.');
+    } finally {
+      setLoading(false);
+    }
+  }, [questionCount, selectedTopic, updateTopicById]);
+
   useEffect(() => {
     if (commandRanRef.current) return;
     const pending = getPendingAction();
@@ -44,7 +54,7 @@ export default function QuizzesPage() {
       const byName = topics.find((t) => t.name.toLowerCase().trim() === pending.topic?.toLowerCase().trim());
       if (byName) {
         setSelectedTopicId(byName.id);
-        setActiveTopic(byName.id);
+        setCurrentTopicById(byName.id);
       }
     }
 
@@ -52,25 +62,7 @@ export default function QuizzesPage() {
     setTimeout(() => {
       void handleGenerateFromTopic();
     }, 0);
-  }, [topics]);
-
-  async function handleGenerateFromTopic() {
-    if (!selectedTopic) return;
-    setLoading(true);
-    setError(null);
-    try {
-      const questions: QuizQuestion[] = await generateQuiz(selectedTopic.name, questionCount);
-      incrementAiInteraction();
-      updateTopic(selectedTopic.id, { quizzes: questions });
-      setTopics(getTopics());
-      setAnswers({});
-      setSubmitted(false);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to generate quiz.');
-    } finally {
-      setLoading(false);
-    }
-  }
+  }, [handleGenerateFromTopic, setCurrentTopicById, topics]);
 
   function handleAnswer(qIdx: number, optIdx: number) {
     if (submitted) return;
@@ -112,7 +104,7 @@ export default function QuizzesPage() {
             onChange={(e) => {
               const id = e.target.value || null;
               setSelectedTopicId(id);
-              setActiveTopic(id);
+              setCurrentTopicById(id);
               setAnswers({});
               setSubmitted(false);
             }}

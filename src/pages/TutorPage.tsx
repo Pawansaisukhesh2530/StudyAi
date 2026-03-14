@@ -8,8 +8,6 @@ import {
   saveConversation,
   createConversation,
   deleteConversation,
-  getActiveTopic,
-  getTopics,
   type Conversation,
   type ChatMessage,
 } from '../services/storage';
@@ -22,11 +20,13 @@ import {
   setPendingAction,
   type IntentResult,
 } from '../services/intentSystem';
+import { useTopicContext } from '../context/TopicContext';
 
 const REQUEST_COOLDOWN_MS = 2000;
 
 export default function TutorPage() {
   const navigate = useNavigate();
+  const { topics, currentTopic } = useTopicContext();
   const [conversations, setConversations] = useState<Conversation[]>(() => getConversations());
   const [activeId, setActiveId] = useState<string | null>(() => {
     const convs = getConversations();
@@ -38,7 +38,7 @@ export default function TutorPage() {
   const [showSuggestions, setShowSuggestions] = useState(false);
   const lastRequestAtRef = useRef<number>(0);
   const messagesEndRef = useRef<HTMLDivElement>(null);
-  const recentTopics = getTopics().slice(0, 5);
+  const recentTopics = topics.slice(0, 5);
   const commandSuggestions = getCommandSuggestions(input);
 
   const activeConversation = conversations.find((c) => c.id === activeId) ?? null;
@@ -103,8 +103,7 @@ export default function TutorPage() {
 
   function resolveTopic(intentResult: IntentResult): string | null {
     if (intentResult.topic) return intentResult.topic;
-    const activeTopic = getActiveTopic();
-    return activeTopic?.name ?? null;
+    return currentTopic?.name ?? null;
   }
 
   function handleIntentCommand(intentResult: IntentResult, updatedConv: Conversation): boolean {
@@ -115,7 +114,7 @@ export default function TutorPage() {
 
     if (topicRequired && !topic) {
       const failMsg = createAssistantMessage(
-        'I need a topic first. Try a command like: "Explain machine learning" or open Workspace and set a current topic.'
+        'Please create or select a topic first.'
       );
       saveConversation({
         ...updatedConv,
@@ -138,6 +137,9 @@ export default function TutorPage() {
       generate_notes: 'Generating notes',
       generate_quiz: 'Generating quiz',
       generate_flashcards: 'Generating flashcards',
+      add_flashcard: 'Adding flashcards',
+      delete_flashcard: 'Deleting flashcard',
+      edit_flashcard: 'Editing flashcard',
       explain_topic: 'Opening explanation flow',
       learning_mode: 'Starting learning mode',
       save_topic: 'Saving topic',

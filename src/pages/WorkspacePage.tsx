@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect } from 'react';
+import { useState, useRef, useEffect, useCallback } from 'react';
 import {
   Search, Lightbulb, Loader2, HelpCircle, FileText, Save,
   Network, MessageCircle, Send, Zap, Baby, Globe, Shuffle,
@@ -21,18 +21,14 @@ import {
   type DiagramData,
 } from '../services/geminiService';
 import {
-  upsertTopicFromExplanation,
-  getActiveTopic,
-  setActiveTopic,
-  updateTopic,
   createQuiz,
   saveNote,
   incrementAiInteraction,
   completeTopicStep,
   incrementConceptsLearned,
-  type Topic,
 } from '../services/storage';
 import { clearPendingAction, getPendingAction } from '../services/intentSystem';
+import { useTopicContext } from '../context/TopicContext';
 
 const SUGGESTIONS = ['Internet of Things', 'Quantum Computing', 'Machine Learning', 'Climate Change', 'Photosynthesis', 'World War II'];
 
@@ -45,8 +41,8 @@ const EXPLAIN_MODES: { mode: ExplainMode; icon: typeof Zap; label: string; color
 
 export default function WorkspacePage() {
   const navigate = useNavigate();
-  const [currentTopic, setCurrentTopic] = useState<Topic | null>(() => getActiveTopic());
-  const [topic, setTopic] = useState(() => getActiveTopic()?.name ?? '');
+  const { currentTopic, setCurrentTopicById, upsertTopicExplanation, updateTopicById } = useTopicContext();
+  const [topic, setTopic] = useState(() => currentTopic?.name ?? '');
   const [loadingExplanation, setLoadingExplanation] = useState(false);
   const [loadingQuiz, setLoadingQuiz] = useState(false);
   const [loadingNotes, setLoadingNotes] = useState(false);
@@ -75,11 +71,12 @@ export default function WorkspacePage() {
     try {
       const text = await generateExplanation(trimmed);
       incrementAiInteraction();
-      const nextTopic = upsertTopicFromExplanation(trimmed, text);
+      const nextTopic = upsertTopicExplanation(trimmed, text);
       completeTopicStep(nextTopic.id, 'explanation');
       incrementConceptsLearned(4);
-      setCurrentTopic({ ...nextTopic, completedSteps: [...(nextTopic.completedSteps ?? []), 'explanation'] });
-      setActiveTopic(nextTopic.id);
+      updateTopicById(nextTopic.id, {
+        completedSteps: [...new Set([...(nextTopic.completedSteps ?? []), 'explanation'])],
+      });
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to generate explanation.');
     } finally {
@@ -94,7 +91,7 @@ export default function WorkspacePage() {
     try {
       const text = await reexplain(currentTopic.name, currentTopic.explanation, mode);
       incrementAiInteraction();
-      const updated = updateTopic(currentTopic.id, { explanation: text });
+      const updated = updateTopicById(currentTopic.id, { explanation: text });
       if (mode === 'examples') {
         completeTopicStep(currentTopic.id, 'examples');
       }
@@ -102,7 +99,7 @@ export default function WorkspacePage() {
         const nextSteps = mode === 'examples'
           ? [...new Set([...(updated.completedSteps ?? []), 'examples'])]
           : updated.completedSteps;
-        setCurrentTopic({ ...updated, completedSteps: nextSteps ?? [] });
+        updateTopicById(updated.id, { completedSteps: nextSteps ?? [] });
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to reexplain.');
@@ -136,8 +133,7 @@ export default function WorkspacePage() {
       const data = await generateDiagram(currentTopic.name);
       incrementAiInteraction();
       const diagramStr = JSON.stringify(data);
-      updateTopic(currentTopic.id, { diagram: diagramStr });
-      setCurrentTopic((prev) => prev ? { ...prev, diagram: diagramStr } : prev);
+      updateTopicById(currentTopic.id, { diagram: diagramStr });
       setDiagramData(data);
       setShowDiagram(true);
     } catch (err) {
@@ -154,15 +150,14 @@ export default function WorkspacePage() {
     try {
       const questions = await generateQuiz(currentTopic.name, 5);
       incrementAiInteraction();
-      updateTopic(currentTopic.id, { quizzes: questions });
+      updateTopicById(currentTopic.id, { quizzes: questions });
       createQuiz(currentTopic.name, questions);
       completeTopicStep(currentTopic.id, 'quiz');
       completeTopicStep(currentTopic.id, 'summary');
-      setCurrentTopic((prev) => prev ? {
-        ...prev,
+      updateTopicById(currentTopic.id, {
         quizzes: questions,
-        completedSteps: [...new Set([...(prev.completedSteps ?? []), 'quiz', 'summary'])],
-      } : prev);
+        completedSteps: [...new Set([...(currentTopic.completedSteps ?? []), 'quiz', 'summary'])],
+      });
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to generate quiz.');
     } finally {
@@ -177,10 +172,13 @@ export default function WorkspacePage() {
     try {
       const notes = await generateNotes(currentTopic.name);
       incrementAiInteraction();
-      updateTopic(currentTopic.id, { notes });
+      updateTopicById(currentTopic.id, { notes });
       saveNote({ topic: currentTopic.name, content: notes });
       completeTopicStep(currentTopic.id, 'notes');
-      setCurrentTopic((prev) => prev ? { ...prev, notes, completedSteps: [...(prev.completedSteps ?? []), 'notes'] } : prev);
+      updateTopicById(currentTopic.id, {
+        notes,
+        completedSteps: [...new Set([...(currentTopic.completedSteps ?? []), 'notes'])],
+      });
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to generate notes.');
     } finally {
@@ -188,11 +186,11 @@ export default function WorkspacePage() {
     }
   }
 
-  function handleSaveTopic() {
+  const handleSaveTopic = useCallback(() => {
     if (!currentTopic) return;
-    setActiveTopic(currentTopic.id);
+    setCurrentTopicById(currentTopic.id);
     setSaved(true);
-  }
+  }, [currentTopic, setCurrentTopicById]);
 
   const activeDiagram: DiagramData | null = (() => {
     if (diagramData) return diagramData;
@@ -222,11 +220,12 @@ export default function WorkspacePage() {
         try {
           const text = await generateExplanation(nextTopic);
           incrementAiInteraction();
-          const savedTopic = upsertTopicFromExplanation(nextTopic, text);
+          const savedTopic = upsertTopicExplanation(nextTopic, text);
           completeTopicStep(savedTopic.id, 'explanation');
           incrementConceptsLearned(4);
-          setCurrentTopic({ ...savedTopic, completedSteps: [...(savedTopic.completedSteps ?? []), 'explanation'] });
-          setActiveTopic(savedTopic.id);
+          updateTopicById(savedTopic.id, {
+            completedSteps: [...new Set([...(savedTopic.completedSteps ?? []), 'explanation'])],
+          });
         } catch (err) {
           setError(err instanceof Error ? err.message : 'Failed to generate explanation.');
         } finally {
@@ -241,7 +240,7 @@ export default function WorkspacePage() {
       clearPendingAction();
       if (currentTopic) handleSaveTopic();
     }
-  }, [currentTopic]);
+  }, [currentTopic, handleSaveTopic, topic, updateTopicById, upsertTopicExplanation]);
 
   return (
     <div className="page-container">

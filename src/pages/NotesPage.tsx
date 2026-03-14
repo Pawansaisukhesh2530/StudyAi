@@ -1,24 +1,17 @@
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { FileText, Loader2, Edit3, Check, X } from 'lucide-react';
 import MarkdownRenderer from '../components/MarkdownRenderer';
 import { generateNotes } from '../services/geminiService';
 import {
-  getTopics,
-  getActiveTopicId,
-  setActiveTopic,
-  updateTopic,
   saveNote,
   incrementAiInteraction,
-  type Topic,
 } from '../services/storage';
 import { clearPendingAction, getPendingAction } from '../services/intentSystem';
+import { useTopicContext } from '../context/TopicContext';
 
 export default function NotesPage() {
-  const [topics, setTopics] = useState<Topic[]>(() => getTopics());
-  const [selectedTopicId, setSelectedTopicId] = useState<string | null>(() => {
-    const active = getActiveTopicId();
-    return active ?? (getTopics()[0]?.id ?? null);
-  });
+  const { topics, currentTopicId, setCurrentTopicById, updateTopicById } = useTopicContext();
+  const [selectedTopicId, setSelectedTopicId] = useState<string | null>(() => currentTopicId ?? topics[0]?.id ?? null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [editing, setEditing] = useState(false);
@@ -27,6 +20,24 @@ export default function NotesPage() {
 
   const selectedTopic = topics.find((t) => t.id === selectedTopicId) ?? null;
   const activeNotes = selectedTopic?.notes ?? null;
+
+  const handleGenerate = useCallback(async () => {
+    if (!selectedTopic) return;
+    setLoading(true);
+    setError(null);
+    try {
+      const content = await generateNotes(selectedTopic.name);
+      incrementAiInteraction();
+      updateTopicById(selectedTopic.id, { notes: content });
+      saveNote({ topic: selectedTopic.name, content });
+      setEditing(false);
+      setEditContent('');
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to generate notes.');
+    } finally {
+      setLoading(false);
+    }
+  }, [selectedTopic, updateTopicById]);
 
   useEffect(() => {
     if (commandRanRef.current) return;
@@ -39,7 +50,7 @@ export default function NotesPage() {
       const byName = topics.find((t) => t.name.toLowerCase().trim() === pending.topic?.toLowerCase().trim());
       if (byName) {
         setSelectedTopicId(byName.id);
-        setActiveTopic(byName.id);
+        setCurrentTopicById(byName.id);
       }
     }
 
@@ -47,26 +58,7 @@ export default function NotesPage() {
     setTimeout(() => {
       void handleGenerate();
     }, 0);
-  }, [topics]);
-
-  async function handleGenerate() {
-    if (!selectedTopic) return;
-    setLoading(true);
-    setError(null);
-    try {
-      const content = await generateNotes(selectedTopic.name);
-      incrementAiInteraction();
-      updateTopic(selectedTopic.id, { notes: content });
-      saveNote({ topic: selectedTopic.name, content });
-      setTopics(getTopics());
-      setEditing(false);
-      setEditContent('');
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to generate notes.');
-    } finally {
-      setLoading(false);
-    }
-  }
+  }, [handleGenerate, setCurrentTopicById, topics]);
 
   function handleEditStart() {
     if (!activeNotes) return;
@@ -76,8 +68,7 @@ export default function NotesPage() {
 
   function handleEditSave() {
     if (!selectedTopicId) return;
-    updateTopic(selectedTopicId, { notes: editContent });
-    setTopics(getTopics());
+    updateTopicById(selectedTopicId, { notes: editContent });
     setEditing(false);
   }
 
@@ -96,7 +87,7 @@ export default function NotesPage() {
             onChange={(e) => {
               const id = e.target.value || null;
               setSelectedTopicId(id);
-              setActiveTopic(id);
+              setCurrentTopicById(id);
               setEditing(false);
             }}
           >

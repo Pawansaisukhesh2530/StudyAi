@@ -10,19 +10,16 @@ import {
   type QuizQuestion,
 } from '../services/geminiService';
 import {
-  upsertTopicFromExplanation,
-  updateTopic,
   createQuiz,
   incrementAiInteraction,
-  setActiveTopic,
   completeTopicStep,
   incrementConceptsLearned,
-  getActiveTopic,
 } from '../services/storage';
 import StructuredExplanation from '../components/StructuredExplanation';
 import FlashCard from '../components/FlashCard';
 import { SkeletonExplanation, SkeletonCard } from '../components/SkeletonLoader';
 import MarkdownRenderer from '../components/MarkdownRenderer';
+import { useTopicContext } from '../context/TopicContext';
 
 const STEPS = [
   { key: 'topic', label: 'Choose Topic', emoji: '🎯', description: 'Enter a topic to start learning' },
@@ -36,8 +33,9 @@ const STEPS = [
 
 export default function LearningModePage() {
   const navigate = useNavigate();
+  const { currentTopic, upsertTopicExplanation, updateTopicById, setCurrentTopicById } = useTopicContext();
   const [stepIdx, setStepIdx] = useState(0);
-  const [topicInput, setTopicInput] = useState(() => getActiveTopic()?.name ?? '');
+  const [topicInput, setTopicInput] = useState(() => currentTopic?.name ?? '');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [explanation, setExplanation] = useState('');
@@ -58,8 +56,8 @@ export default function LearningModePage() {
     try {
       const text = await generateExplanation(trimmed);
       incrementAiInteraction();
-      const topic = upsertTopicFromExplanation(trimmed, text);
-      setActiveTopic(topic.id);
+      const topic = upsertTopicExplanation(trimmed, text);
+      setCurrentTopicById(topic.id);
       completeTopicStep(topic.id, 'explanation');
       incrementConceptsLearned(4);
       setExplanation(text);
@@ -78,8 +76,8 @@ export default function LearningModePage() {
     try {
       const cards = await generateFlashcards(currentTopicName, 6);
       incrementAiInteraction();
-      const topic = upsertTopicFromExplanation(currentTopicName, explanation);
-      updateTopic(topic.id, { flashcards: cards });
+      const topic = upsertTopicExplanation(currentTopicName, explanation);
+      updateTopicById(topic.id, { flashcards: cards });
       completeTopicStep(topic.id, 'flashcards');
       setFlashcards(cards);
       setCardIndex(0);
@@ -97,8 +95,8 @@ export default function LearningModePage() {
     try {
       const qs = await generateQuiz(currentTopicName, 5);
       incrementAiInteraction();
-      const topic = upsertTopicFromExplanation(currentTopicName, explanation);
-      updateTopic(topic.id, { quizzes: qs });
+      const topic = upsertTopicExplanation(currentTopicName, explanation);
+      updateTopicById(topic.id, { quizzes: qs });
       createQuiz(currentTopicName, qs);
       completeTopicStep(topic.id, 'quiz');
       setQuestions(qs);
